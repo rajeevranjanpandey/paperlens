@@ -1,32 +1,56 @@
-# React + TypeScript + Vite
+# PaperLens
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+[![Deploy to GitHub Pages](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml/badge.svg)](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml) [![Tests](https://img.shields.io/badge/tests-14%2F14%20passing-brightgreen)](tests)
 
-Currently, two official plugins are available:
+Check a draft before you submit it. Paste or upload a paper and PaperLens reports three things, entirely in your browser:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+| Check | What it does | How it works |
+|---|---|---|
+| Similarity | Finds passages that overlap with references you choose, and shows each match next to its source | 7-word shingle matching against the bundled sample texts or any files you add |
+| Writing style | Experimental indicators: sentence-length uniformity, vocabulary variety, formulaic phrases, repeated sentence openers | Pure statistics computed from the text. No AI-authorship probability, by design |
+| Quality | Flesch reading ease and grade level, long-sentence and passive-voice counts, in-text citation detection, and concrete suggestions | Readability formulas, pattern matching and simple heuristics |
 
-## React Compiler
+## What this is not
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+PaperLens is a study tool, not Turnitin. It cannot search the internet or academic databases, so a 0% similarity here proves nothing about the wider world. Its style indicators describe a text; they cannot show who or what wrote it, and no verdict should be inferred from them. Detectors that output an "AI percentage" are unreliable enough that several universities have stopped using them, and false accusations harm students.
 
-## Expanding the Oxlint configuration
+Nothing you paste is uploaded or stored. There is no backend, no analytics and no account.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Run it
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm test       # 14 engine tests
+npm run dev    # http://127.0.0.1:5173
+npm run build  # static output in dist/
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+A live copy is built to GitHub Pages by `.github/workflows/pages.yml` on every push to `main`.
+
+## Try it in 30 seconds
+
+1. Open the app, expand References, and leave the bundled sample texts checked.
+2. Copy the first paragraph of the climate sample (see `shared/paper-core.mjs`) into the paper box.
+3. Press Analyze paper. The Similarity tab shows the passage highlighted with its source.
+4. Replace the text with your own writing and press Analyze again to see a clean report.
+
+## Structure
+
+```text
+shared/paper-core.mjs   Analysis engine: tokenizer, shingle similarity, style
+                        indicators, readability, citations, passive voice.
+                        Shared by the app and the tests, no dependencies.
+src/App.tsx             The interface: editor, reference manager, report tabs.
+tests/paper-core.test.mjs  Engine tests, including copied vs original text,
+                        no double counting, empty inputs, user references.
+```
+
+## Extending it
+
+The engine in `shared/paper-core.mjs` is plain JavaScript with no dependencies, so you can reuse it in a CLI, an LMS plugin or a server. Sensible next steps if you want to go further:
+
+- Add real reference corpora (your class's past submissions, with consent).
+- Add docx/pdf parsing before analysis (e.g. mammoth or pdf.js).
+- Persist reports locally with IndexedDB if you want history.
+
+MIT licensed. Not affiliated with Turnitin. Similarity is computed only against references you provide; style indicators are experimental statistics, not authorship verdicts.
