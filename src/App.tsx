@@ -1,13 +1,39 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { analyze, SAMPLE_REFERENCES, similarityReport } from "../shared/paper-core.mjs";
 import { extractText } from "../shared/extract-text.mjs";
 
 type RefDoc = { id: string; title: string; text: string; builtin?: boolean };
+type HistEntry = { at: number; words: number; similarity: number; flags: number };
+
+function loadJSON<T>(key: string, fallback: T): T {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function saveJSON(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* storage can be blocked in embedded previews */
+  }
+}
+function clearDraft() {
+  try {
+    window.localStorage.removeItem("pl.draft");
+  } catch {
+    /* ignore */
+  }
+}
 
 const fmtPct = (n: number | null | undefined) => (n == null ? "–" : `${n.toFixed(1)}%`);
 
 export default function App() {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => loadJSON("pl.draft", ""));
+  const [target, setTarget] = useState<number>(() => loadJSON("pl.target", 0) || 0);
+  const [history, setHistory] = useState<HistEntry[]>(() => loadJSON("pl.history", [] as HistEntry[]));
   const [refs, setRefs] = useState<RefDoc[]>(SAMPLE_REFERENCES.map((r) => ({ ...r, builtin: true })));
   const [useSamples, setUseSamples] = useState(true);
   const [tab, setTab] = useState<"overview" | "similarity" | "style" | "quality">("overview");
@@ -22,10 +48,33 @@ export default function App() {
 
   const run = useCallback(() => {
     if (!text.trim()) return;
-    setReport(analyze(text, activeRefs));
+    const result = analyze(text, activeRefs);
+    setReport(result);
     setRanAt(Date.now());
     setTab("overview");
+    const entry: HistEntry = {
+      at: Date.now(),
+      words: result.quality.wordCount,
+      similarity: Math.round(result.similarity.percent * 10) / 10,
+      flags: result.style.commonPhrases.length + result.tone.length,
+    };
+    setHistory((h) => {
+      const next = [entry, ...h].slice(0, 8);
+      saveJSON("pl.history", next);
+      return next;
+    });
   }, [text, activeRefs]);
+
+  // Draft auto-save: the paper survives a refresh or an accidental close.
+  useEffect(() => {
+    const t = window.setTimeout(() => saveJSON("pl.draft", text), 600);
+    return () => window.clearTimeout(t);
+  }, [text]);
+
+  const setTargetWords = (n: number) => {
+    setTarget(n);
+    saveJSON("pl.target", n);
+  };
 
   const readPaper = async (f: File) => {
     setBusy(true);
@@ -98,6 +147,18 @@ export default function App() {
               Your paper
             </label>
             <div className="editor-actions">
+              <label className="target" title="Set an essay word count goal">
+                <span className="muted small">Target words</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={100}
+                  placeholder="2000"
+                  value={target || ""}
+                  onChange={(e) => setTargetWords(e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)))}
+                  aria-label="Target word count"
+                />
+              </label>
               <button type="button" className="btn-ghost" onClick={() => paperFile.current?.click()} disabled={busy}>
                 Upload .txt / .md / .pdf / .docx
               </button>
@@ -113,6 +174,28 @@ export default function App() {
             spellCheck={false}
           />
 
+          {(target > 0 || text) && (
+            <div className="editor-foot">
+              {target > 0 && (
+                <div className="progress" role="progressbar" aria-label="Word target progress" aria-valuenow={Math.min(100, Math.round((words / target) * 100))} aria-valuemin={0} aria-valuemax={100}>
+                  <span style={{ width: `${Math.min(100, (words / target) * 100)}%` }} />
+                </div>
+              )}
+              {target > 0 && (
+                <span className="muted small tabular">
+                  {words} / {target} words {words > target ? "— over target" : words / target > 0.9 ? "— nearly there" : ""}
+                </span>
+              )}
+              {text && (
+                <span className="muted small">
+                  Draft saved in this browser
+                  <button type="button" className="btn-link" onClick={() => { clearDraft(); setText(""); }}>
+                    clear
+                  </button>
+                </span>
+              )}
+            </div>
+          )}
           <details className="refs">
             <summary>
               References to compare against <span className="muted">({activeRefs.length})</span>
@@ -155,6 +238,12 @@ export default function App() {
 
         {report && (
           <section className="report" aria-label="Report">
+            <div className="report-actions">
+              <button type="button" className="btn-ghost" onClick={() => downloadReport(report!)}>
+                Download report
+              </button>
+              <span className="muted small">Reports are generated in your browser and never leave it.</span>
+            </div>
             <nav className="tabs" role="tablist" aria-label="Report sections">
               {([
                 ["overview", "Overview"],
@@ -171,7 +260,27 @@ export default function App() {
             {tab === "overview" && <Overview r={report} text={text} />}
             {tab === "similarity" && <Similarity r={report.similarity} text={text} />}
             {tab === "style" && <Style r={report.style} />}
-            {tab === "quality" && <Quality r={report.quality} />}
+            {tab === "quality" && <Quality r={report.quality} full={report} />}
+          </section>
+        )}
+
+        {history.length > 0 && (
+          <section className="history" aria-labelledby="hist-title">
+            <h3 id="hist-title">Recent checks</h3>
+            <p className="muted small">Stored only in this browser. Word count and similarity at the moment of each check.</p>
+            <ul>
+              {history.map((h) => (
+                <li key={h.at}>
+                  <span className="tabular">{new Date(h.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                  <span className="tabular">{h.words} words</span>
+                  <span className={`tabular sim ${h.similarity >= 25 ? "bad" : h.similarity >= 10 ? "warn" : "good"}`}>{h.similarity}% similarity</span>
+                  <span className="tabular">{h.flags} flags</span>
+                </li>
+              ))}
+            </ul>
+            <button type="button" className="btn-link" onClick={() => { setHistory([]); saveJSON("pl.history", []); }}>
+              clear history
+            </button>
           </section>
         )}
       </main>
@@ -432,8 +541,10 @@ function Indicator({ title, value, desc, flag }: { title: string; value: string;
 
 /* ---------------- Quality ---------------- */
 
-function Quality({ r }: { r: ReturnType<typeof analyze>["quality"] }) {
+function Quality({ r, full }: { r: ReturnType<typeof analyze>["quality"]; full: ReturnType<typeof analyze> }) {
   const read = r.readability;
+  const cross = full.citations;
+  const tone = full.tone;
   return (
     <div className="panel">
       <div className="panel-head">
@@ -496,6 +607,119 @@ function Quality({ r }: { r: ReturnType<typeof analyze>["quality"] }) {
           </ul>
         </>
       )}
+
+      {cross.hasReferenceSection ? (
+        <>
+          <h4 className="sub">Citations vs reference list</h4>
+          {cross.missing.length === 0 && cross.uncited.length === 0 ? (
+            <p className="note">Every in-text citation has a matching reference entry, and every entry is cited.</p>
+          ) : (
+            <div className="cards">
+              {cross.missing.length > 0 && (
+                <div className="card stat">
+                  <span className="stat-label">Cited but not in the list</span>
+                  <strong className="big tabular">{cross.missing.length}</strong>
+                  <ul className="flaglist">
+                    {cross.missing.map((c, i) => (
+                      <li key={i}>
+                        <code>{c.raw}</code> — {c.surname}, {c.year}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {cross.uncited.length > 0 && (
+                <div className="card stat">
+                  <span className="stat-label">Listed but never cited</span>
+                  <strong className="big tabular">{cross.uncited.length}</strong>
+                  <ul className="flaglist">
+                    {cross.uncited.map((e: { line: string }, i: number) => (
+                      <li key={i}>
+                        <code>{e.line.slice(0, 60)}…</code>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {cross.ieee && cross.ieee.entryCount > 0 && cross.ieee.missing.length > 0 && (
+                <div className="card stat">
+                  <span className="stat-label">Numbers without entries</span>
+                  <strong className="big tabular">{cross.ieee.missing.length}</strong>
+                  <span className="muted small">In-text [{cross.ieee!.missing.join(", ")}] have no matching numbered entry.</span>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="note">
+          No reference list was found. Add one with a “References” or “Bibliography” heading to enable citation cross-checking.
+        </p>
+      )}
+
+      <h4 className="sub">Academic tone</h4>
+      {tone.length === 0 ? (
+        <p className="note">No informal wording, second-person address or stray exclamation marks were found.</p>
+      ) : (
+        <ul className="flaglist tone-list">
+          {tone.slice(0, 12).map((f, i) => (
+            <li key={i}>
+              <code>“{f.text}”</code>
+              <span className="muted">{f.note}</span>
+            </li>
+          ))}
+          {tone.length > 12 && <li className="muted small">…and {tone.length - 12} more.</li>}
+        </ul>
+      )}
     </div>
   );
+}
+
+/** Build a plain-text report and download it. Nothing leaves the browser. */
+function downloadReport(report: ReturnType<typeof analyze>) {
+  const L: string[] = [];
+  const { similarity, style, quality, citations, tone } = report;
+  L.push("PaperLens report");
+  L.push(`Generated ${new Date().toLocaleString()}`);
+  L.push("");
+  L.push("SIMILARITY");
+  L.push(`  ${similarity.percent.toFixed(1)}% (${similarity.matchedWords} of ${similarity.totalWords} words) against ${similarity.referenceCount} reference(s)`);
+  for (const src of similarity.perSource) L.push(`  - ${src.title}: ${src.words} words (${src.percentOfPaper.toFixed(1)}%)`);
+  if (similarity.selfRepetition.percent > 1) L.push(`  Self-repetition: ${similarity.selfRepetition.percent.toFixed(1)}%`);
+  L.push("");
+  L.push("WRITING STYLE (experimental, descriptive only)");
+  if (style.sentenceLength) L.push(`  Sentence length: mean ${style.sentenceLength.mean.toFixed(0)} words, variation ${style.sentenceLength.cv.toFixed(2)}`);
+  L.push(`  Vocabulary variety (type-token ratio): ${style.typeTokenRatio?.toFixed(2) ?? "–"}`);
+  L.push(`  Common phrases: ${style.commonPhrases.length ? style.commonPhrases.join(", ") : "none"}`);
+  L.push("");
+  L.push("QUALITY");
+  L.push(`  ${quality.wordCount} words, ${quality.sentenceCount} sentences, ${quality.paragraphCount} paragraphs`);
+  if (quality.readability.enough) {
+    L.push(`  Flesch reading ease ${quality.readability.fleschReadingEase}, grade level ${quality.readability.fleschKincaidGrade}`);
+  }
+  L.push(`  Long sentences (>35 words): ${quality.longSentences}; passive constructions: ${quality.passiveCount}`);
+  L.push(`  Citations detected: ${quality.citations.length}`);
+  if (citations.hasReferenceSection) {
+    L.push(`  Cited but missing from the reference list: ${citations.missing.map((c) => c.raw).join("; ") || "none"}`);
+    L.push(`  Listed but never cited: ${citations.uncited.map((e: { line: string }) => e.line.slice(0, 50)).join("; ") || "none"}`);
+  } else {
+    L.push("  No reference list found; citation cross-check skipped");
+  }
+  L.push("");
+  L.push("ACADEMIC TONE");
+  L.push(tone.length ? tone.map((f) => `  - "${f.text}": ${f.note}`).join("\n") : "  No informal wording found.");
+  L.push("");
+  if (quality.suggestions.length) {
+    L.push("SUGGESTIONS");
+    for (const s of quality.suggestions) L.push(`  - ${s}`);
+    L.push("");
+  }
+  L.push("Similarity is computed only against the references provided. Style indicators are");
+  L.push("experimental statistics, not authorship verdicts. Generated locally by PaperLens.");
+  const blob = new Blob([L.join("\n")], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "paperlens-report.txt";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }

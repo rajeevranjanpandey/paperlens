@@ -430,5 +430,127 @@ export function analyze(text, references = []) {
     similarity: similarityReport(text, references),
     style: styleIndicators(text),
     quality: qualityReport(text),
+    citations: citationCrossCheck(text),
+    tone: toneFlags(text),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Citation cross-check: in-text citations vs the reference list        */
+/* ------------------------------------------------------------------ */
+
+const REF_HEADING = /(?:^|\n)\s*(?:references|bibliography|works cited|reference list|works cited page)\s*:?\s*(?:\n|$)/i;
+
+const norm = (x) => x.toLowerCase().replace(/[^a-z\u00c0-\u024f0-9]/g, "");
+
+/**
+ * Compare in-text citations against the reference list.
+ * Reports citations with no matching entry and entries never cited.
+ * Understands author-year styles and IEEE-style numbers.
+ */
+export function citationCrossCheck(text) {
+  const heading = text.match(REF_HEADING);
+  if (!heading) {
+    return { hasReferenceSection: false, missing: [], uncited: [], inText: [], entries: [] };
+  }
+  const body = text.slice(0, heading.index);
+  const listText = text.slice(heading.index + heading[0].length);
+  const listLines = listText.split(/\n+/).map((l) => l.trim()).filter((l) => l.length > 8);
+
+  // --- author-year in-text citations: (Smith, 2020), (Smith et al., 2019), Smith (2020)
+  const inText = [];
+  const parens = /\(([^()]{2,80})\)/g;
+  for (const m of body.matchAll(parens)) {
+    const inner = m[1];
+    const y = inner.match(/(?:^|,\s*|\s)(\d{4})[a-z]?\b/);
+    if (!y) continue;
+    const surname = inner.split(",")[0].trim().split(/\s+(?:et\s+al\.?|and|&)/i)[0].trim();
+    if (!/^[A-Z\u00C0-\u024F][a-z\u00C0-\u024F'’-]+$/.test(surname)) continue;
+    inText.push({ surname, year: y[1], raw: m[0], start: m.index });
+  }
+  const narrative = /\b([A-Z\u00C0-\u024F][a-z\u00C0-\u024F'’-]+)(?:\s+(?:et\s+al\.?|and\s+[A-Z][a-z]+))?\s*\((\d{4})[a-z]?\)/g;
+  for (const m of body.matchAll(narrative)) {
+    inText.push({ surname: m[1], year: m[2], raw: m[0], start: m.index });
+  }
+
+  // --- reference list entries: first surname + any year on the line
+  const entries = listLines.map((line, i) => {
+    const year = (line.match(/\b(\d{4})[a-z]?\b/) || [])[1];
+    const surnameMatch = line.match(/^([^,(\n]{2,40})/);
+    let surname = "";
+    if (surnameMatch) {
+      const bits = surnameMatch[1].trim().split(/\s+/);
+      // APA/Harvard: "Smith, J."; MLA: "Smith, John." — first word is fine
+      surname = bits[0].replace(/[^A-Za-z\u00C0-\u024F'’-]/g, "");
+    }
+    const num = (line.match(/^\[?(\d{1,3})\]?\.?\s/) || [])[1];
+    return { line, index: i + 1, surname, year, num: num ? Number(num) : null };
+  });
+
+  const entryKey = (e) => `${norm(e.surname)}|${e.year || ""}`;
+  const missing = [];
+  const matchedKeys = new Set();
+  for (const c of inText) {
+    const hit = entries.find((e) => norm(e.surname) === norm(c.surname) && (!e.year || !c.year || e.year === c.year) || (norm(e.surname) === norm(c.surname) && Math.abs(Number(e.year || 0) - Number(c.year || 0)) <= 1));
+    if (hit) {
+      matchedKeys.add(entryKey(hit));
+    } else {
+      missing.push(c);
+    }
+  }
+  const uncited = entries.filter((e) => !matchedKeys.has(entryKey(e)));
+
+  // --- IEEE: [n] in text vs numbered entries
+  const ieee = { cited: new Set(), entryCount: entries.filter((e) => e.num).length, missing: [], uncited: [] };
+  if (ieee.entryCount > 0) {
+    for (const m of body.matchAll(/\[(\d{1,3})\]/g)) ieee.cited.add(Number(m[1]));
+    ieee.missing = [...ieee.cited].filter((n) => n < 1 || n > ieee.entryCount);
+    ieee.uncited = entries.filter((e) => e.num && !ieee.cited.has(e.num)).map((e) => e.num);
+  }
+
+  return { hasReferenceSection: true, missing, uncited, inText, entries, ieee };
+}
+
+/* ------------------------------------------------------------------ */
+/* Academic tone flags                                                  */
+/* ------------------------------------------------------------------ */
+
+const INFORMAL_PATTERNS = [
+  ["\\ba lot of\\b", "a lot of — prefer 'many' or 'much'"],
+  ["\\blots of\\b", "lots of — prefer 'many' or 'much'"],
+  ["\\bkind of\\b", "kind of — hedge; prefer a precise claim"],
+  ["\\bsort of\\b", "sort of — hedge; prefer a precise claim"],
+  ["\\bbasically\\b", "basically — filler in academic prose"],
+  ["\\bpretty much\\b", "pretty much — informal hedge"],
+  ["\\bnowadays\\b", "nowadays — prefer a dated statement"],
+  ["\\bstuff\\b", "stuff — too vague for academic writing"],
+  ["\\bthings\\b", "things — often vague; name the things"],
+  ["\\bgonna\\b|\\bkinda\\b|\\bwanna\\b", "very informal wording"],
+  ["\\bokay\\b|\\bok\\b", "ok / okay — informal in prose"],
+];
+
+/**
+ * Flag informal wording, second-person address and exclamation marks,
+ * which most academic style guides ask writers to avoid.
+ */
+export function toneFlags(text) {
+  const body = text;
+  const flags = [];
+  for (const [re, note] of INFORMAL_PATTERNS) {
+    for (const m of body.matchAll(new RegExp(re, "gi"))) {
+      flags.push({ start: m.index, end: m.index + m[0].length, text: m[0], note });
+    }
+  }
+  for (const m of body.matchAll(/\byou\b|\byour\b|\byourselves\b/gi)) {
+    // only flag outside quotes
+    const before = body.slice(Math.max(0, m.index - 40), m.index);
+    if (!/[“"]\s*$/.test(before)) {
+      flags.push({ start: m.index, end: m.index + m[0].length, text: m[0], note: "second-person address — academic writing usually addresses the argument, not the reader" });
+    }
+  }
+  for (const m of body.matchAll(/!/g)) {
+    flags.push({ start: m.index, end: m.index + 1, text: "!", note: "exclamation mark — check whether your style guide allows it" });
+  }
+  flags.sort((a, b) => a.start - b.start);
+  return flags;
 }

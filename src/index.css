@@ -63,9 +63,9 @@ main { width: min(980px, 100% - 32px); margin: 0 auto; flex: 1; }
 
 /* editor */
 .editor { margin-top: 28px; padding: 18px; }
-.editor-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.editor-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .field-label { font-weight: 600; font-size: 15px; }
-.editor-actions { display: flex; align-items: center; gap: 12px; }
+.editor-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .editor textarea {
   width: 100%; min-height: 260px; resize: vertical;
   border: 1px solid var(--line); border-radius: 12px; padding: 14px;
@@ -176,3 +176,28 @@ main { width: min(980px, 100% - 32px); margin: 0 auto; flex: 1; }
 
 .file-note { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
 .file-note.bad { color: var(--bad); background: #b3392b12; border-radius: 8px; padding: 6px 10px; }
+
+/* new: target, progress, history, report actions, flag lists */
+.target { display: inline-flex; align-items: center; gap: 6px; }
+.target input {
+  width: 76px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+  background: #fcfcfa; font-size: 14px;
+}
+.target input:focus { border-color: var(--accent); outline: none; }
+.editor-foot { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+.progress {
+  flex: 1; min-width: 160px; height: 8px; border-radius: 8px; background: #e9e7e0; overflow: hidden;
+}
+.progress span { display: block; height: 100%; background: var(--accent); border-radius: 8px; transition: width 0.4s ease; }
+.report-actions { display: flex; align-items: center; gap: 12px; margin-top: 22px; }
+.history { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); }
+.history h3 { font-size: 18px; }
+.history ul { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 6px; }
+.history li { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; color: var(--ink-2); }
+.history .sim.bad { color: var(--bad); font-weight: 600; }
+.history .sim.warn { color: var(--warn); font-weight: 600; }
+.history .sim.good { color: var(--good); font-weight: 600; }
+.flaglist { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; font-size: 14px; }
+.flaglist li { display: flex; gap: 10px; align-items: baseline; }
+.flaglist code { background: #f1efe9; border-radius: 6px; padding: 1px 6px; font-family: var(--mono); font-size: 13px; }
+.tone-list li { flex-wrap: wrap; }
