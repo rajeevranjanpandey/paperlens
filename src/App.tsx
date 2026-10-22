@@ -260,7 +260,7 @@ export default function App() {
             {tab === "overview" && <Overview r={report} text={text} />}
             {tab === "similarity" && <Similarity r={report.similarity} text={text} />}
             {tab === "style" && <Style r={report.style} />}
-            {tab === "quality" && <Quality r={report.quality} full={report} />}
+            {tab === "quality" && <Quality r={report.quality} full={report} text={text} />}
           </section>
         )}
 
@@ -541,7 +541,7 @@ function Indicator({ title, value, desc, flag }: { title: string; value: string;
 
 /* ---------------- Quality ---------------- */
 
-function Quality({ r, full }: { r: ReturnType<typeof analyze>["quality"]; full: ReturnType<typeof analyze> }) {
+function Quality({ r, full, text }: { r: ReturnType<typeof analyze>["quality"]; full: ReturnType<typeof analyze>; text: string }) {
   const read = r.readability;
   const cross = full.citations;
   const tone = full.tone;
@@ -671,8 +671,42 @@ function Quality({ r, full }: { r: ReturnType<typeof analyze>["quality"]; full: 
           {tone.length > 12 && <li className="muted small">…and {tone.length - 12} more.</li>}
         </ul>
       )}
+
+      {(tone.length > 0 || (full.style.phraseSpans?.length ?? 0) > 0) && (
+        <>
+          <h4 className="sub">Flagged in your text</h4>
+          <p className="hl-legend">
+            <span><i className="hl hl-tone" /> informal / tone</span>
+            <span><i className="hl hl-phrase" /> recycled phrase</span>
+          </p>
+          <div className="marked hl-view">{renderFlagged(text, tone, full.style.phraseSpans || [])}</div>
+        </>
+      )}
     </div>
   );
+}
+
+/** Paper text with tone and phrase flags highlighted inline. */
+function renderFlagged(text: string, tone: { start: number; end: number }[], phrases: { start: number; end: number }[]) {
+  const spans = [
+    ...tone.map((f) => ({ ...f, kind: "tone" as const })),
+    ...phrases.map((f) => ({ ...f, kind: "phrase" as const })),
+  ].sort((a, b) => a.start - b.start);
+  const out: React.ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
+  for (const sp of spans) {
+    if (sp.start < cursor) continue; // overlap: first flag wins
+    if (sp.start > cursor) out.push(<span key={key++}>{text.slice(cursor, sp.start)}</span>);
+    out.push(
+      <mark key={key++} className={sp.kind === "tone" ? "hl-tone" : "hl-phrase"}>
+        {text.slice(sp.start, sp.end)}
+      </mark>,
+    );
+    cursor = sp.end;
+  }
+  if (cursor < text.length) out.push(<span key={key++}>{text.slice(cursor)}</span>);
+  return out;
 }
 
 /** Build a plain-text report and download it. Nothing leaves the browser. */

@@ -1,6 +1,6 @@
 # PaperLens
 
-[![Deploy to GitHub Pages](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml/badge.svg)](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml) [![Tests](https://img.shields.io/badge/tests-26%2F26%20passing-brightgreen)](tests)
+[![Deploy to GitHub Pages](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml/badge.svg)](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml) [![Tests](https://img.shields.io/badge/tests-28%2F28%20passing-brightgreen)](tests)
 
 Check a draft before you submit it. Paste or upload a paper (.txt, .md, .pdf or .docx) and PaperLens reports the following, entirely in your browser:
 
@@ -11,6 +11,7 @@ Check a draft before you submit it. Paste or upload a paper (.txt, .md, .pdf or 
 | Quality | Flesch reading ease and grade level, long-sentence and passive-voice counts, in-text citation detection, and concrete suggestions | Readability formulas, pattern matching and simple heuristics |
 | Citation cross-check | In-text citations with no reference entry, and reference entries never cited, in author-year and IEEE styles | Heading detection, surname/year extraction and comparison |
 | Academic tone | Informal wording, second-person address and stray exclamation marks, each with a suggested fix | Curated pattern list with positions |
+| Inline flags | Tone and recycled-phrase flags highlighted directly inside your paper text | Overlap-safe span rendering in the Quality tab |
 
 ## What this is not
 

@@ -282,6 +282,13 @@ export function styleIndicators(text) {
   const cv = sentenceLengthCV(sentences);
 
   const phraseHits = AI_PHRASES.filter((p) => lower.includes(p));
+  const phraseSpans = [];
+  for (const p of AI_PHRASES) {
+    const re = new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    for (const m of lower.matchAll(re)) {
+      phraseSpans.push({ start: m.index, end: m.index + p.length, text: m[0] });
+    }
+  }
   const starters = {};
   let starterTotal = 0;
   for (const s of sentences) {
@@ -302,6 +309,7 @@ export function styleIndicators(text) {
     sentenceLength: cv,
     typeTokenRatio: tokens.length ? types / tokens.length : null,
     commonPhrases: phraseHits,
+    phraseSpans,
     starterRepetition: { counts: starters, total: starterTotal, sentenceShare: sentences.length ? starterTotal / sentences.length : 0 },
     contractions,
     punctuationVariety: { emDashes, semicolons, exclamations },

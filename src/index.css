@@ -201,3 +201,13 @@ main { width: min(980px, 100% - 32px); margin: 0 auto; flex: 1; }
 .flaglist li { display: flex; gap: 10px; align-items: baseline; }
 .flaglist code { background: #f1efe9; border-radius: 6px; padding: 1px 6px; font-family: var(--mono); font-size: 13px; }
 .tone-list li { flex-wrap: wrap; }
+
+/* inline flag highlights */
+.hl-view { max-height: 300px; line-height: 1.9; }
+.hl-view mark.hl-tone { background: #d9832422; border-bottom: 2px solid #d98324; color: inherit; }
+.hl-view mark.hl-phrase { background: #7c6cf222; border-bottom: 2px solid #7c6cf2; color: inherit; }
+.hl-legend { display: flex; gap: 18px; font-size: 13px; color: var(--muted); margin: 0 0 8px; flex-wrap: wrap; }
+.hl-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.hl { display: inline-block; width: 22px; height: 10px; border-radius: 4px; }
+.hl-tone { background: #d9832433; border-bottom: 2px solid #d98324; }
+.hl-phrase { background: #7c6cf233; border-bottom: 2px solid #7c6cf2; }
