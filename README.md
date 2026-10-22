@@ -2,11 +2,11 @@
 
 [![Deploy to GitHub Pages](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml/badge.svg)](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml) [![Tests](https://img.shields.io/badge/tests-14%2F14%20passing-brightgreen)](tests)
 
-Check a draft before you submit it. Paste or upload a paper and PaperLens reports three things, entirely in your browser:
+Check a draft before you submit it. Paste or upload a paper (.txt, .md, .pdf or .docx) and PaperLens reports three things, entirely in your browser:
 
 | Check | What it does | How it works |
 |---|---|---|
-| Similarity | Finds passages that overlap with references you choose, and shows each match next to its source | 7-word shingle matching against the bundled sample texts or any files you add |
+| Similarity | Finds passages that overlap with references you choose, and shows each match next to its source | 7-word shingle matching against the bundled sample texts or any files you add (.txt, .md, .pdf, .docx) |
 | Writing style | Experimental indicators: sentence-length uniformity, vocabulary variety, formulaic phrases, repeated sentence openers | Pure statistics computed from the text. No AI-authorship probability, by design |
 | Quality | Flesch reading ease and grade level, long-sentence and passive-voice counts, in-text citation detection, and concrete suggestions | Readability formulas, pattern matching and simple heuristics |
 
@@ -37,13 +37,19 @@ A live copy is built to GitHub Pages by `.github/workflows/pages.yml` on every p
 ## Structure
 
 ```text
-shared/paper-core.mjs   Analysis engine: tokenizer, shingle similarity, style
-                        indicators, readability, citations, passive voice.
-                        Shared by the app and the tests, no dependencies.
-src/App.tsx             The interface: editor, reference manager, report tabs.
-tests/paper-core.test.mjs  Engine tests, including copied vs original text,
-                        no double counting, empty inputs, user references.
+shared/paper-core.mjs     Analysis engine: tokenizer, shingle similarity, style
+                          indicators, readability, citations, passive voice.
+shared/extract-text.mjs   Upload parsing: DOCX via fflate + document.xml,
+                          PDF via pdf.js (loaded only when a PDF is opened).
+src/App.tsx               The interface: editor, reference manager, report tabs.
+tests/                    Engine tests (20), including copied vs original text,
+                          no double counting, empty inputs, user references,
+                          DOCX extraction with entities, and binary rejection.
 ```
+
+## Uploads
+
+DOCX files are unzipped in the browser and read from word/document.xml, with paragraph breaks and XML entities preserved. PDFs are parsed with pdf.js page by page; a scanned PDF with no text layer is detected and reported instead of silently checking an empty document. Both parsers also work for reference files.
 
 ## Extending it
 

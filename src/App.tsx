@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { analyze, SAMPLE_REFERENCES, similarityReport } from "../shared/paper-core.mjs";
+import { extractText } from "../shared/extract-text.mjs";
 
 type RefDoc = { id: string; title: string; text: string; builtin?: boolean };
 
@@ -12,6 +13,8 @@ export default function App() {
   const [tab, setTab] = useState<"overview" | "similarity" | "style" | "quality">("overview");
   const [report, setReport] = useState<ReturnType<typeof analyze> | null>(null);
   const [ranAt, setRanAt] = useState<number | null>(null);
+  const [fileNote, setFileNote] = useState("");
+  const [busy, setBusy] = useState(false);
   const paperFile = useRef<HTMLInputElement>(null);
   const refFile = useRef<HTMLInputElement>(null);
 
@@ -25,17 +28,39 @@ export default function App() {
   }, [text, activeRefs]);
 
   const readPaper = async (f: File) => {
-    setText(await f.text());
-    setReport(null);
+    setBusy(true);
+    setFileNote("");
+    try {
+      const r = await extractText(f);
+      if (r.error || !r.text) {
+        setFileNote(r.error || "Nothing could be read from that file.");
+      } else {
+        setText(r.text);
+        setReport(null);
+        setFileNote(`${f.name} · ${r.kind === "docx" ? "Word" : r.kind === "pdf" ? "PDF" : "text"} file loaded`);
+      }
+    } catch (e: any) {
+      setFileNote(`Could not read ${f.name}: ${e?.message || e}`);
+    }
+    setBusy(false);
   };
 
   const addRefs = async (files: FileList) => {
+    setBusy(true);
     const loaded: RefDoc[] = [];
+    let note = "";
     for (const f of Array.from(files)) {
-      loaded.push({ id: `user-${f.name}-${loaded.length}`, title: f.name, text: await f.text() });
+      const r = await extractText(f);
+      if (r.text) {
+        loaded.push({ id: `user-${f.name}-${loaded.length}`, title: f.name, text: r.text });
+      } else {
+        note = `${f.name}: ${r.error || "no text found"}`;
+      }
     }
-    setRefs((r) => [...r, ...loaded]);
-    setReport(null);
+    if (loaded.length) setRefs((r) => [...r, ...loaded]);
+    if (loaded.length || note) setReport(null);
+    setFileNote(note || `${loaded.length} reference${loaded.length === 1 ? "" : "s"} loaded`);
+    setBusy(false);
   };
 
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
@@ -73,10 +98,10 @@ export default function App() {
               Your paper
             </label>
             <div className="editor-actions">
-              <button type="button" className="btn-ghost" onClick={() => paperFile.current?.click()}>
-                Upload .txt / .md
+              <button type="button" className="btn-ghost" onClick={() => paperFile.current?.click()} disabled={busy}>
+                Upload .txt / .md / .pdf / .docx
               </button>
-              <input ref={paperFile} type="file" hidden accept=".txt,.md,.markdown,text/plain" onChange={(e) => e.target.files?.[0] && void readPaper(e.target.files[0])} />
+              <input ref={paperFile} type="file" hidden accept=".txt,.md,.markdown,.pdf,.docx" onChange={(e) => e.target.files?.[0] && void readPaper(e.target.files[0])} />
               <span className="muted small tabular">{words} words</span>
             </div>
           </div>
@@ -110,21 +135,22 @@ export default function App() {
                 ))}
               </ul>
               <div className="ref-add">
-                <button type="button" className="btn-ghost" onClick={() => refFile.current?.click()}>
+                <button type="button" className="btn-ghost" onClick={() => refFile.current?.click()} disabled={busy}>
                   Add reference files
                 </button>
-                <input ref={refFile} type="file" hidden multiple accept=".txt,.md,.markdown,text/plain" onChange={(e) => e.target.files?.length && void addRefs(e.target.files)} />
-                <span className="muted small">Class notes, a friend's draft, sources you paraphrased — any plain text.</span>
+                <input ref={refFile} type="file" hidden multiple accept=".txt,.md,.markdown,.pdf,.docx" onChange={(e) => e.target.files?.length && void addRefs(e.target.files)} />
+                <span className="muted small">Class notes, a friend's draft, sources you paraphrased — .txt, .md, .pdf or .docx.</span>
               </div>
             </div>
           </details>
 
           <div className="run-row">
-            <button type="button" className="btn-primary btn-lg" onClick={run} disabled={!text.trim()}>
-              Analyze paper
+            <button type="button" className="btn-primary btn-lg" onClick={run} disabled={!text.trim() || busy}>
+              {busy ? "Reading file…" : "Analyze paper"}
             </button>
             {ranAt && report && <span className="muted small">Checked locally {new Date(ranAt).toLocaleTimeString()}</span>}
           </div>
+          {fileNote && <p className={`file-note ${/Could not|no text|scan|not supported|zip/i.test(fileNote) ? "bad" : ""}`} role="status">{fileNote}</p>}
         </section>
 
         {report && (

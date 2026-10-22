@@ -173,3 +173,6 @@ main { width: min(980px, 100% - 32px); margin: 0 auto; flex: 1; }
   .tabs { flex-wrap: wrap; }
   .tab { padding: 8px 12px; font-size: 14px; }
 }
+
+.file-note { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
+.file-note.bad { color: var(--bad); background: #b3392b12; border-radius: 8px; padding: 6px 10px; }
