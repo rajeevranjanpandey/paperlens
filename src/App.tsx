@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { analyze, SAMPLE_REFERENCES, similarityReport } from "../shared/paper-core.mjs";
+import { analyze, SAMPLE_REFERENCES, similarityReport, styleIndicators } from "../shared/paper-core.mjs";
 import { extractText } from "../shared/extract-text.mjs";
+import { humanizeText } from "../shared/humanizer-core.mjs";
+import { createIFMComplete, DEFAULT_IFM_MODEL } from "../shared/ifm-provider.mjs";
+import { citationCheck } from "../shared/citation-check.mjs";
 
 type RefDoc = { id: string; title: string; text: string; builtin?: boolean };
 type HistEntry = { at: number; words: number; similarity: number; flags: number };
@@ -36,13 +39,27 @@ export default function App() {
   const [history, setHistory] = useState<HistEntry[]>(() => loadJSON("pl.history", [] as HistEntry[]));
   const [refs, setRefs] = useState<RefDoc[]>(SAMPLE_REFERENCES.map((r) => ({ ...r, builtin: true })));
   const [useSamples, setUseSamples] = useState(true);
-  const [tab, setTab] = useState<"overview" | "similarity" | "style" | "quality">("overview");
+  const [tab, setTab] = useState<"overview" | "similarity" | "style" | "quality" | "citations">("overview");
   const [report, setReport] = useState<ReturnType<typeof analyze> | null>(null);
   const [ranAt, setRanAt] = useState<number | null>(null);
   const [fileNote, setFileNote] = useState("");
   const [busy, setBusy] = useState(false);
   const paperFile = useRef<HTMLInputElement>(null);
   const refFile = useRef<HTMLInputElement>(null);
+
+  // Rewrite (optional, BYO IFM key): the only feature that calls a network API.
+  const [ifmKey, setIfmKey] = useState<string>(() => loadJSON("pl.ifmKey", ""));
+  const [ifmModel, setIfmModel] = useState<string>(() => loadJSON("pl.ifmModel", DEFAULT_IFM_MODEL));
+  const [rwMode, setRwMode] = useState<"lite" | "ultra" | "premium">("ultra");
+  const [rwBusy, setRwBusy] = useState(false);
+  const [rwError, setRwError] = useState("");
+  const [rwResult, setRwResult] = useState<any>(null);
+  const [rwAccepted, setRwAccepted] = useState<boolean[]>([]);
+  const [rwLang, setRwLang] = useState<string>(() => loadJSON("pl.rwLang", "original"));
+  const [rwTone, setRwTone] = useState<string>(() => loadJSON("pl.rwTone", "academic"));
+  const [rwSettings, setRwSettings] = useState<boolean>(() => !loadJSON("pl.ifmKey", ""));
+  const [rwTotal, setRwTotal] = useState<number>(() => loadJSON("pl.rwTotal", 0));
+  const [rwCopied, setRwCopied] = useState(false);
 
   const activeRefs = useMemo(() => refs.filter((r) => r.builtin === useSamples || !r.builtin), [refs, useSamples]);
 
@@ -114,6 +131,114 @@ export default function App() {
 
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
 
+  const makeComplete = () => createIFMComplete({ apiKey: ifmKey.trim(), model: ifmModel.trim() || DEFAULT_IFM_MODEL });
+
+  const currentStyleNote = () => {
+    const parts: string[] = [];
+    if (rwLang === "en-GB") parts.push("Write the output in British English.");
+    if (rwLang === "en-US") parts.push("Write the output in American English.");
+    const tones: Record<string, string> = {
+      academic: "Keep a scholarly, academic tone.",
+      casual: "Use a relaxed, casual tone.",
+      professional: "Use a clear, professional tone.",
+      formal: "Use a formal tone.",
+      simple: "Use plain, simple language.",
+    };
+    if (tones[rwTone]) parts.push(tones[rwTone]);
+    return parts.join(" ");
+  };
+
+  const SAMPLE_REWRITE =
+    "Furthermore, it is important to note that artificial intelligence systems have a lot of potential to significantly improve productivity by approximately 32 percent across 14 industries by the year 2035. Moreover, organisations around the world are leveraging these tools in a wide range of different applications [3]. In conclusion, the utilisation of AI technologies will continue to grow very rapidly in the upcoming years ahead.";
+
+  const loadSample = () => {
+    setText(SAMPLE_REWRITE);
+    setReport(null);
+    setRwResult(null);
+    setRwAccepted([]);
+  };
+
+  const pasteIntoDraft = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t.trim()) {
+        setText(t);
+        setReport(null);
+      } else {
+        setRwError("The clipboard is empty - copy some text first, or paste with Ctrl/Cmd+V.");
+      }
+    } catch {
+      setRwError("Clipboard reading was blocked by the browser - click the input box and paste with Ctrl/Cmd+V instead.");
+    }
+  };
+
+  const runRewrite = async () => {
+    setRwBusy(true);
+    setRwError("");
+    try {
+      const res = await humanizeText(text, { mode: rwMode, complete: makeComplete(), styleNote: currentStyleNote() });
+      setRwResult(res);
+      setRwAccepted(res.blocks.map((b: any) => b.status.startsWith("rewritten")));
+      setRwTotal((prev) => {
+        const next = prev + res.stats.wordsIn;
+        saveJSON("pl.rwTotal", next);
+        return next;
+      });
+    } catch (e: any) {
+      setRwError(e?.message || String(e));
+    }
+    setRwBusy(false);
+  };
+
+  const redoBlock = async (i: number) => {
+    if (!rwResult) return;
+    setRwBusy(true);
+    setRwError("");
+    try {
+      const res = await humanizeText(rwResult.blocks[i].original, { mode: "ultra", complete: makeComplete(), styleNote: currentStyleNote() });
+      const fresh = res.blocks.find((b: any) => b.kind === "para") || res.blocks[0];
+      setRwResult((prev: any) => {
+        const blocks = [...prev.blocks];
+        blocks[i] = { ...blocks[i], output: fresh.output, status: fresh.status };
+        return { ...prev, blocks };
+      });
+      setRwAccepted((prev) => {
+        const next = [...prev];
+        next[i] = fresh.status.startsWith("rewritten");
+        return next;
+      });
+    } catch (e: any) {
+      setRwError(e?.message || String(e));
+    }
+    setRwBusy(false);
+  };
+
+  const applyRewrites = () => {
+    if (!rwResult) return;
+    const composed = rwResult.blocks.map((b: any, i: number) => (rwAccepted[i] ? b.output : b.original)).join("\n\n");
+    setText(composed);
+    setReport(null);
+    setRwResult(null);
+    setRwAccepted([]);
+  };
+
+  const composedOutput = rwResult
+    ? rwResult.blocks.map((b: any, i: number) => (rwAccepted[i] ? b.output : b.original)).join("\n\n")
+    : "";
+
+  const copyOutput = async () => {
+    try {
+      await navigator.clipboard.writeText(composedOutput);
+      setRwCopied(true);
+      setTimeout(() => setRwCopied(false), 2000);
+    } catch {
+      setRwError("Copy was blocked by the browser - select the output text and copy it manually.");
+    }
+  };
+
+  const rwCvBefore = rwResult ? styleIndicators(text).sentenceLength?.cv : null;
+  const rwCvAfter = rwResult ? styleIndicators(composedOutput).sentenceLength?.cv : null;
+
   return (
     <div className="page">
       <header className="nav">
@@ -133,7 +258,8 @@ export default function App() {
           <h1>Read your paper the way a reviewer might.</h1>
           <p>
             Paste or upload a draft and PaperLens reports overlapping text against references you choose, experimental writing-style indicators, and concrete quality
-            feedback on readability and citations. Everything runs in your browser; nothing is uploaded or stored.
+            feedback on readability and citations. Every check runs in your browser and nothing is uploaded; the one exception is the optional rewrite tool below, which
+            sends your draft to the AI provider you configure, using your own key.
           </p>
           <p className="muted small">
             PaperLens is an independent study tool, not Turnitin, and it cannot search the internet or academic databases. Its style indicators are descriptive statistics,
@@ -236,6 +362,189 @@ export default function App() {
           {fileNote && <p className={`file-note ${/Could not|no text|scan|not supported|zip/i.test(fileNote) ? "bad" : ""}`} role="status">{fileNote}</p>}
         </section>
 
+        <section className="rewrite card" aria-labelledby="rewrite-label">
+          <div className="hz-hero">
+            <h2 id="rewrite-label" className="hz-title">Rewrite in a natural voice</h2>
+            <p className="muted hz-sub">
+              Paragraph-by-paragraph rewriting powered by IFM — your numbers, dates and citations are protected, and every rewrite must pass automatic checks
+              before you see it; a paragraph whose rewrites all fail comes back unchanged. This is the one PaperLens feature that sends text out: to the IFM API,
+              with your own key, which stays in this browser.
+            </p>
+          </div>
+
+          <div className="hz-controls">
+            <div className="hz-toggle" role="group" aria-label="Rewrite mode">
+              {([
+                ["lite", "Standard"],
+                ["ultra", "Ultra"],
+                ["premium", "Premium"],
+              ] as const).map(([id, label]) => (
+                <button key={id} type="button" className={`hz-seg ${rwMode === id ? "on" : ""}`} onClick={() => setRwMode(id)} aria-pressed={rwMode === id}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <label className="hz-select">
+              <span className="muted small">Language</span>
+              <select value={rwLang} onChange={(e) => { setRwLang(e.target.value); saveJSON("pl.rwLang", e.target.value); }} aria-label="Rewrite language">
+                <option value="original">Same as original</option>
+                <option value="en-US">English (US)</option>
+                <option value="en-GB">English (UK)</option>
+              </select>
+            </label>
+            <label className="hz-select">
+              <span className="muted small">Tone / Purpose</span>
+              <select value={rwTone} onChange={(e) => { setRwTone(e.target.value); saveJSON("pl.rwTone", e.target.value); }} aria-label="Rewrite tone">
+                <option value="academic">Academic</option>
+                <option value="professional">Professional</option>
+                <option value="formal">Formal</option>
+                <option value="casual">Casual</option>
+                <option value="simple">Simple</option>
+              </select>
+            </label>
+            <button type="button" className="btn-ghost hz-settings-btn" onClick={() => setRwSettings((v) => !v)} aria-expanded={rwSettings}>
+              ⚙ Settings
+            </button>
+          </div>
+
+          {rwSettings && (
+            <div className="rw-controls">
+              <label className="rw-field">
+                <span className="muted small">IFM API key (stored only in this browser)</span>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  placeholder="IFM-v1_…"
+                  value={ifmKey}
+                  onChange={(e) => { setIfmKey(e.target.value); saveJSON("pl.ifmKey", e.target.value); }}
+                  aria-label="IFM API key"
+                />
+              </label>
+              <label className="rw-field">
+                <span className="muted small">Model</span>
+                <input
+                  type="text"
+                  value={ifmModel}
+                  onChange={(e) => { setIfmModel(e.target.value); saveJSON("pl.ifmModel", e.target.value); }}
+                  aria-label="IFM model"
+                />
+              </label>
+            </div>
+          )}
+
+          <div className="hz-panels">
+            <div className="hz-panel">
+              <div className="hz-panel-head">
+                <span className="hz-panel-title">✎ Input Text</span>
+                <span className="muted small tabular">{words} words</span>
+              </div>
+              <textarea
+                className="hz-area"
+                value={text}
+                rows={12}
+                onChange={(e) => { setText(e.target.value); setReport(null); }}
+                placeholder="Paste your text here, or type it — this is the same draft as the editor above."
+                aria-label="Text to rewrite"
+              />
+              <div className="hz-panel-foot">
+                <div className="hz-input-actions">
+                  <button type="button" className="btn-ghost" onClick={() => void pasteIntoDraft()}>
+                    Paste Text
+                  </button>
+                  <button type="button" className="btn-link" onClick={loadSample}>
+                    ✦ Try sample
+                  </button>
+                </div>
+                <button type="button" className="btn-humanize" onClick={() => void runRewrite()} disabled={rwBusy || !ifmKey.trim() || words < 30}>
+                  {rwBusy ? "Rewriting…" : "✦ Humanize →"}
+                </button>
+              </div>
+              {!ifmKey.trim() && <p className="muted small hz-hint">Add your IFM API key under Settings to enable rewriting.</p>}
+              {ifmKey.trim() && words < 30 && <p className="muted small hz-hint">At least ~30 words are needed.</p>}
+            </div>
+
+            <div className="hz-panel">
+              <div className="hz-panel-head">
+                <span className="hz-panel-title">✦ Human output</span>
+                <a className="btn-link" href="https://github.com/rajeevranjanpandey/paperlens#rewrite-with-ifm-optional" target="_blank" rel="noreferrer">
+                  Help
+                </a>
+              </div>
+              {!rwResult ? (
+                <div className="hz-empty">
+                  <span className="hz-spark" aria-hidden="true">✦</span>
+                  <p className="muted">Your rewritten text will appear here…</p>
+                </div>
+              ) : (
+                <div className="hz-out">
+                  <p className="muted small">
+                    {rwResult.stats.wordsIn} words in → {rwResult.stats.wordsOut} out · {rwResult.stats.rewritten} rewritten, {rwResult.stats.kept} kept
+                    {rwCvBefore != null && rwCvAfter != null ? ` · sentence-length variation ${rwCvBefore.toFixed(2)} → ${rwCvAfter.toFixed(2)}` : ""}
+                  </p>
+                  <div className="hz-out-text">{composedOutput}</div>
+                  <div className="hz-panel-foot">
+                    <button type="button" className="btn-ghost" onClick={() => void copyOutput()}>
+                      {rwCopied ? "Copied ✓" : "Copy output"}
+                    </button>
+                    <div className="hz-input-actions">
+                      <button type="button" className="btn-ghost" onClick={() => { setRwResult(null); setRwAccepted([]); }}>
+                        Discard
+                      </button>
+                      <button type="button" className="btn-primary" onClick={applyRewrites} disabled={rwBusy}>
+                        Apply to paper
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {rwError && <p className="file-note bad" role="alert">{rwError}</p>}
+
+          {rwResult && (
+            <>
+              <h4 className="sub">Paragraph by paragraph</h4>
+              <div className="rw-results">
+                {rwResult.blocks.map((b: any, i: number) => (
+                  <div key={i} className="rw-block">
+                    <div className="rw-cols">
+                      <div className="rw-col">
+                        <span className="stat-label">Original · {b.kind}</span>
+                        <p>{b.original}</p>
+                      </div>
+                      <div className="rw-col out">
+                        <span className="stat-label">Output</span>
+                        <p>{b.output}</p>
+                      </div>
+                    </div>
+                    <div className="rw-actions">
+                      <span className="pill">{b.status}</span>
+                      {b.output !== b.original && (
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            checked={!!rwAccepted[i]}
+                            onChange={(e) => setRwAccepted((prev) => { const next = [...prev]; next[i] = e.target.checked; return next; })}
+                          />
+                          Use this rewrite
+                        </label>
+                      )}
+                      {b.kind === "para" && (
+                        <button type="button" className="btn-ghost" onClick={() => void redoBlock(i)} disabled={rwBusy}>
+                          Redo paragraph
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          <p className="hz-total muted small">{rwTotal.toLocaleString()} words rewritten in this browser so far</p>
+        </section>
+
         {report && (
           <section className="report" aria-label="Report">
             <div className="report-actions">
@@ -250,6 +559,7 @@ export default function App() {
                 ["similarity", "Similarity"],
                 ["style", "Writing style"],
                 ["quality", "Quality"],
+                ["citations", "Citations"],
               ] as const).map(([id, label]) => (
                 <button key={id} role="tab" aria-selected={tab === id} className={`tab ${tab === id ? "on" : ""}`} onClick={() => setTab(id)}>
                   {label}
@@ -261,6 +571,7 @@ export default function App() {
             {tab === "similarity" && <Similarity r={report.similarity} text={text} />}
             {tab === "style" && <Style r={report.style} />}
             {tab === "quality" && <Quality r={report.quality} full={report} text={text} />}
+            {tab === "citations" && <Citations text={text} />}
           </section>
         )}
 
@@ -286,7 +597,7 @@ export default function App() {
       </main>
 
       <footer className="foot">
-        <span>PaperLens · runs entirely in your browser</span>
+        <span>PaperLens · checks run entirely in your browser</span>
         <span className="muted">
           Not affiliated with Turnitin. Similarity is computed only against the references you provide; style indicators are experimental statistics, not authorship verdicts.
         </span>
@@ -535,6 +846,113 @@ function Indicator({ title, value, desc, flag }: { title: string; value: string;
       <span className="stat-label">{title}</span>
       <strong className="tabular">{value}</strong>
       <p className="muted small">{desc}</p>
+    </div>
+  );
+}
+
+/* ---------------- Citations ---------------- */
+
+function Citations({ text }: { text: string }) {
+  const r = useMemo(() => citationCheck(text), [text]);
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div>
+          <h3>Citation check</h3>
+          <p className="muted">
+            Each reference is split into fields — authors, year, title, venue, DOI — and every field is checked separately, because a citation can point at a real
+            paper and still be wrong. PaperLens runs locally and cannot query academic databases, so these are format and plausibility signals, not authenticity
+            verdicts. Use the DOI and Scholar links to verify an entry against the real record in one click.
+          </p>
+        </div>
+      </div>
+
+      {!r.hasReferenceSection ? (
+        <p className="empty">
+          No reference list was found. Add one under a “References” or “Bibliography” heading and this tab will check every entry field by field, and cross-check it
+          against the citations in your text.
+        </p>
+      ) : (
+        <>
+          <div className="cards">
+            <div className="card stat">
+              <span className="stat-label">Reference entries</span>
+              <strong className="big tabular">{r.summary.entries}</strong>
+              <span className="muted small">{r.styles.length ? `In-text styles detected: ${r.styles.join(", ")}` : "No in-text citations detected"}</span>
+            </div>
+            <div className="card stat">
+              <span className="stat-label">Entries with a DOI</span>
+              <strong className="big tabular">{r.summary.withDoi}</strong>
+              <span className="muted small">DOI syntax is checked locally; resolving it is one click on the entry below.</span>
+            </div>
+            <div className={`card stat ${r.summary.flagged ? "warn" : ""}`}>
+              <span className="stat-label">Entries to verify</span>
+              <strong className="big tabular">{r.summary.flagged}</strong>
+              <span className="muted small">Entries carrying at least one warning-level signal.</span>
+            </div>
+            <div className={`card stat ${r.summary.missingInText || r.summary.uncited ? "warn" : ""}`}>
+              <span className="stat-label">Cross-check</span>
+              <strong className="big tabular">{r.summary.missingInText + r.summary.uncited}</strong>
+              <span className="muted small">
+                {r.summary.missingInText} cited in text with no entry · {r.summary.uncited} listed but never cited
+                {r.ieeeMissing.length ? ` · IEEE numbers with no entry: ${r.ieeeMissing.join(", ")}` : ""}
+              </span>
+            </div>
+          </div>
+
+          {r.missing.length > 0 && (
+            <>
+              <h4 className="sub">Cited in the text, missing from the list</h4>
+              <ul className="flaglist">
+                {r.missing.map((m: any, i: number) => (
+                  <li key={i}>
+                    <code>{m.raw}</code>
+                    <span className="muted">{m.surname}, {m.year} — no matching reference entry</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          <h4 className="sub">Every entry, field by field</h4>
+          <ul className="cit-list">
+            {r.entries.map((e: any) => (
+              <li key={e.index} className="cit-entry">
+                <p className="cit-line">{e.line}</p>
+                <div className="cit-fields">
+                  <span className="pill">{e.num ? `IEEE [${e.num}]` : e.surname || "entry"}</span>
+                  {e.year && <span className="pill">{e.year}</span>}
+                  {e.doi ? (
+                    <a className="cit-link" href={e.doiUrl} target="_blank" rel="noreferrer">
+                      DOI: {e.doi}
+                    </a>
+                  ) : (
+                    <span className="muted small">no DOI</span>
+                  )}
+                  <a className="cit-link" href={e.scholarUrl} target="_blank" rel="noreferrer">
+                    Verify on Google Scholar
+                  </a>
+                </div>
+                {e.flags.length > 0 && (
+                  <ul className="flaglist">
+                    {e.flags.map((f: any, i: number) => (
+                      <li key={i}>
+                        <span className={`pill ${f.level === "warn" ? "pill-warn" : ""}`}>{f.level === "warn" ? "check" : "note"}</span>
+                        <span className="muted">{f.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="note">
+            Why field-by-field? Studies of AI-generated bibliographies have found large shares of fabricated or mangled references, and a reference can be wrong in
+            one field — wrong year, wrong authors, invented DOI — while looking right overall. A warning here means “verify this field”, never “this source is
+            fake”.
+          </p>
+        </>
+      )}
     </div>
   );
 }
