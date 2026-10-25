@@ -11,14 +11,23 @@
 /* stays provider-agnostic and testable (see ifm-provider.mjs).       */
 /* ------------------------------------------------------------------ */
 
+// Latin + Arabic-Indic + Extended Arabic-Indic digits. JS \d is ASCII-only,
+// so numbers written with Arabic digits (common in UAE documents) would
+// otherwise go unprotected.
+const DIG = "\\d\\u0660-\\u0669\\u06F0-\\u06F9";
+
 const PATTERNS = [
   /https?:\/\/\S+/g, // URLs
   /[\w.+-]+@[\w-]+\.[\w.]+/g, // emails
   /\[\d+(?:,\s*\d+)*\]/g, // citations [12], [3, 4]
+  // Author-year citations, parenthetical and narrative - protected as one
+  // span so a rewrite cannot quietly alter a surname or year inside them.
+  /\(\s*[A-Z][\w'’.-]+(?:\s+(?:et al\.|&|and)\s+[\w'’.-]+)?,?\s*\d{4}[a-z]?\s*\)/g,
+  /\b[A-Z][\w'’.-]+\s+\(\d{4}[a-z]?\)/g,
   /\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/g, // dates 03/06/1991
   // numbers + units. NOTE: no leading \s? - it would let this pattern start
   // on the space before a date and shadow the date alternative above.
-  /[$€£]?\d[\d,]*(?:\.\d+)?(?:\s?(?:%|ms|s|MB|GB|kHz|Hz))?/g,
+  new RegExp(`[$€£]?[${DIG}][${DIG},]*(?:\\.[${DIG}]+)?(?:\\s?(?:%|ms|s|MB|GB|kHz|Hz))?`, "g"),
 ];
 // One combined pass: alternation order = priority, and a single scan never
 // rescans replaced text, so digits inside an inserted [[Pn]] token can
@@ -26,7 +35,7 @@ const PATTERNS = [
 const COMBINED = new RegExp(PATTERNS.map((p) => `(?:${p.source})`).join("|"), "g");
 
 const TOKEN_RE = /\[\[P\d+\]\]/g;
-const NUMBER_RE = /\d[\d,]*(?:\.\d+)?/g;
+const NUMBER_RE = new RegExp(`[${DIG}][${DIG},]*(?:\\.[${DIG}]+)?`, "g");
 
 function protect(text) {
   const protectedMap = {};
@@ -48,9 +57,31 @@ function classify(chunk) {
   const lines = chunk.split("\n").filter((ln) => ln.trim());
   if (!lines.length) return "para";
   if (lines.every((ln) => ln.trimStart().startsWith("|"))) return "table";
+  // Tab-separated rows (a table pasted from a spreadsheet) are structure too.
+  if (lines.length >= 2 && lines.every((ln) => (ln.match(/\t/g) || []).length >= 2)) return "table";
   if (lines.every((ln) => /^\s*([-*•]|\d+[.)])\s+/.test(ln))) return "list";
   if (lines.length === 1 && (lines[0].startsWith("#") || (lines[0].length <= 80 && !/[.,;:]$/.test(lines[0].trim())))) return "heading";
   return "para";
+}
+
+/** Split an over-long paragraph into sentence-group chunks (<= ~180 words),
+ *  so one wall of text never becomes one giant model call. */
+function chunkLongPara(chunk) {
+  const wordCount = chunk.split(/\s+/).length;
+  if (wordCount <= 220) return [chunk];
+  const sentences = chunk.match(/[^.!?]+[.!?]+["')\]]*\s*/g) || [chunk];
+  const out = [];
+  let cur = "";
+  for (const s of sentences) {
+    if (cur && (cur + s).split(/\s+/).length > 180) {
+      out.push(cur.trim());
+      cur = s;
+    } else {
+      cur += s;
+    }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out.length ? out : [chunk];
 }
 
 /** Split a document into blocks; only paragraphs are rewritable. */
@@ -61,8 +92,10 @@ export function parseDocument(text) {
     if (!chunk) continue;
     const kind = classify(chunk);
     if (kind === "para") {
-      const { workText, protectedMap } = protect(chunk);
-      blocks.push({ kind, original: chunk, workText, protectedMap });
+      for (const piece of chunkLongPara(chunk)) {
+        const { workText, protectedMap } = protect(piece);
+        blocks.push({ kind, original: piece, workText, protectedMap });
+      }
     } else {
       blocks.push({ kind, original: chunk, workText: chunk, protectedMap: {} });
     }

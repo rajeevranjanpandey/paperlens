@@ -1,6 +1,6 @@
 # PaperLens
 
-[![Deploy to GitHub Pages](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml/badge.svg)](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml) [![Tests](https://img.shields.io/badge/tests-54%2F54%20passing-brightgreen)](tests)
+[![Deploy to GitHub Pages](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml/badge.svg)](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml) [![Tests](https://img.shields.io/badge/tests-61%2F61%20passing-brightgreen)](tests)
 
 Check a draft before you submit it. Paste or upload a paper (.txt, .md, .pdf or .docx) and PaperLens reports the following, entirely in your browser. An optional rewrite tool (bring your own IFM key) is the single exception, described below.
 
@@ -36,7 +36,7 @@ Nothing you paste for the checks is uploaded or stored. There is no backend, no 
 
 ```bash
 npm install
-npm test       # 54 tests: engine, extraction, citation check, humanizer, IFM provider
+npm test       # 61 tests: engine, extraction, citation check, humanizer, IFM provider, adversarial, extraction, citation check, humanizer, IFM provider
 npm run dev    # http://127.0.0.1:5173
 npm run build  # static output in dist/
 ```
@@ -65,7 +65,7 @@ shared/humanizer-core.mjs Rewrite pipeline: block parsing, protected spans,
 shared/ifm-provider.mjs   IFM chat-completions provider (OpenAI-compatible).
 src/App.tsx               The interface: editor, reference manager, report
                           tabs (incl. Citations), and the rewrite panel.
-tests/                    54 tests: engine, style checks, DOCX/PDF extraction,
+tests/                    61 tests: engine, style checks, DOCX/PDF extraction,
                           citation check incl. a real-world grant-proposal
                           reference list, humanizer protection/verification,
                           and the IFM provider against a stubbed fetch.

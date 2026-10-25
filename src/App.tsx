@@ -282,7 +282,7 @@ export default function App() {
           )}
           <details className="refs">
             <summary>
-              References to compare against <span className="muted">({activeRefs.length})</span>
+              References for the similarity check <span className="muted">(optional · {activeRefs.length} selected — the other checks and the rewrite don't need these)</span>
             </summary>
             <div className="refs-body">
               <label className="check">

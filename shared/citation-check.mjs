@@ -27,7 +27,7 @@ function findRefSection(text) {
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
     if (!t || t.length > 110) continue;
-    const m = t.match(/^(?:selected\s+)?(?:technical\s+)?(?:list\s+of\s+)?(references|bibliography|works cited)\b/i);
+    const m = t.match(/^(?:selected\s+)?(?:technical\s+)?(?:list\s+of\s+)?(references|bibliography|works cited|reference list)\b/i);
     if (!m) continue;
     const rest = t.slice(m[0].length).trim();
     // Remainder must be empty, a colon, or a parenthetical note - otherwise
@@ -95,6 +95,9 @@ function inTextRefs(body) {
   for (const m of body.matchAll(/\(([^()]{2,60}?),\s*((?:19|20)\d{2})[a-z]?\)/g)) {
     const cap = m[1].split(/\s+/).find((tok) => /^[A-Z]/.test(tok));
     if (cap) push(cap.replace(/[^A-Za-z'’-]/g, ""), m[2], m[0]);
+  }
+  for (const m of body.matchAll(/\(([A-Z][A-Za-z'’.-]+)\s+et al\.\s*((?:19|20)\d{2})[a-z]?\)/g)) {
+    push(m[1], m[2], m[0]); // (Smith et al. 2020) - no comma before the year
   }
   for (const m of body.matchAll(/\b([A-Z][A-Za-z'’.-]+)\s+\(((?:19|20)\d{2})[a-z]?\)/g)) {
     push(m[1], m[2], m[0]); // narrative: Smith (2020)
