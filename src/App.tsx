@@ -61,6 +61,17 @@ export default function App() {
   const [rwEstimate, setRwEstimate] = useState<{ blocks: number; paragraphs: number; approxCalls: number } | null>(null);
   const rwAbort = useRef<AbortController | null>(null);
 
+  // Standalone citation check: a first-class section on the main page, not
+  // buried inside the post-analysis report. It reads the reference list
+  // inside the paper itself - no similarity references, no IFM key.
+  const [citText, setCitText] = useState<string | null>(null);
+  const citSection = useRef<HTMLElement | null>(null);
+  const runCitationCheck = () => {
+    if (!text.trim()) return;
+    setCitText(text);
+    requestAnimationFrame(() => citSection.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+
   const activeRefs = useMemo(() => refs.filter((r) => r.builtin === useSamples || !r.builtin), [refs, useSamples]);
 
   const run = useCallback(() => {
@@ -303,7 +314,7 @@ export default function App() {
           )}
           <details className="refs">
             <summary>
-              References for the similarity check <span className="muted">(optional · {activeRefs.length} selected — the other checks and the rewrite don't need these)</span>
+              References for the similarity check <span className="muted">(optional · {activeRefs.length} selected — only the Similarity tab uses these; the citation check reads your paper's own reference list and never needs them)</span>
             </summary>
             <div className="refs-body">
               <label className="check">
@@ -384,6 +395,25 @@ export default function App() {
             </div>
           )}
           {fileNote && <p className={`file-note ${/Could not|no text|scan|not supported|zip/i.test(fileNote) ? "bad" : ""}`} role="status">{fileNote}</p>}
+        </section>
+
+        <section className="citcheck card" aria-labelledby="citcheck-title" ref={citSection}>
+          <div className="hz-panel-head">
+            <span id="citcheck-title" className="hz-panel-title">Citation check</span>
+          </div>
+          <p className="muted">
+            Checks the citations and the reference list <strong>inside your paper itself</strong> — every entry field by field (authors, year, title,
+            venue, DOI), plus a cross-check that everything cited in the text appears in the list and everything listed is cited. It needs nothing
+            else: no references to upload, no IFM key.
+          </p>
+          <div className="run-row">
+            <button type="button" className="btn-primary" onClick={runCitationCheck} disabled={!text.trim() || busy}>
+              Check citations
+            </button>
+            {!text.trim() && <span className="muted small">Paste or upload your paper above first.</span>}
+            {citText != null && citText !== text && <span className="muted small">Your paper changed since this check — run it again to refresh the results.</span>}
+          </div>
+          {citText != null && <Citations text={citText} />}
         </section>
 
         {(rwBusy || rwResult || rwError) && (
@@ -815,7 +845,7 @@ function Citations({ text }: { text: string }) {
 
       {!r.hasReferenceSection ? (
         <p className="empty">
-          No reference list was found. Add one under a “References” or “Bibliography” heading and this tab will check every entry field by field, and cross-check it
+          No reference list was found. Add one under a “References” or “Bibliography” heading and this check will check every entry field by field, and cross-check it
           against the citations in your text.
         </p>
       ) : (

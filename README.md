@@ -64,7 +64,9 @@ shared/citation-check.mjs Field-by-field reference checks + cross-check
 shared/humanizer-core.mjs Rewrite pipeline: block parsing, protected spans,
                           verification, judge passes; provider-agnostic.
 shared/ifm-provider.mjs   IFM chat-completions provider (OpenAI-compatible).
-src/App.tsx               The interface: editor, reference manager, report
+src/App.tsx               The interface: editor, a standalone Citation check
+                          section on the main page (runs on the paper alone,
+                          no reference uploads), reference manager, report
                           tabs (incl. Citations), and the rewrite panel.
 tests/                    66 tests: engine, style checks, DOCX/PDF extraction,
                           citation check incl. a real-world grant-proposal
