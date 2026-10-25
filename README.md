@@ -1,6 +1,6 @@
 # PaperLens
 
-[![Deploy to GitHub Pages](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml/badge.svg)](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml) [![Tests](https://img.shields.io/badge/tests-55%2F55%20passing-brightgreen)](tests)
+[![Deploy to GitHub Pages](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml/badge.svg)](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml) [![Tests](https://img.shields.io/badge/tests-54%2F54%20passing-brightgreen)](tests)
 
 Check a draft before you submit it. Paste or upload a paper (.txt, .md, .pdf or .docx) and PaperLens reports the following, entirely in your browser. An optional rewrite tool (bring your own IFM key) is the single exception, described below.
 
@@ -16,13 +16,13 @@ Check a draft before you submit it. Paste or upload a paper (.txt, .md, .pdf or 
 
 ## Rewrite with IFM (optional)
 
-The one feature that talks to a network: a paragraph-by-paragraph rewrite powered by the [IFM](https://api.ifm.ai) API (default model `IFM/K2-Horizon-375B-A23B`), inspired by one-click humanizer tools but built around verification instead of promises:
+The one feature that talks to a network — and it is part of the same single flow: paste or upload your draft, add your IFM key, press **Analyze & Rewrite**. The checks and the rewrite run together; there are no modes to choose. The methodology follows the published pipelines of sites like superhumanizer.ai and humanizethis.io — split, lock, rewrite, verify — with the verification done mechanically instead of promised:
 
 - **Protected spans.** Numbers, dates, URLs, emails and citations are swapped for placeholders before the model sees the text and restored afterwards.
-- **Mechanical verification.** Every candidate must keep every protected span exactly, keep the document's number counts identical (multiset check), and stay within a length band — otherwise it is rejected.
-- **Modes.** Standard (one pass), Ultra (checks plus retries with a sterner prompt), Premium (two candidates, a judge picks the more faithful one, then a drift check). A paragraph whose candidates all fail is returned unchanged.
-- **Your key, your browser.** You paste your own IFM API key; it is stored only in your browser's localStorage and sent only to api.ifm.ai (whose CORS policy allows calls from this site). PaperLens has no backend and never sees it.
-- **No authorship scores.** The panel reports descriptive before/after statistics (word counts, sentence-length variation), never an "AI probability" — the same philosophy as the style indicators.
+- **Two candidates per paragraph.** Each paragraph is rewritten twice in parallel; candidates must keep every protected span exactly, keep the document's number counts identical (multiset check), and stay within a length band — otherwise they are rejected, with one sterner retry.
+- **Judge + drift check.** A judge call keeps the more faithful of two passing candidates, and a final drift check can still reject the winner. A paragraph whose candidates all fail is returned unchanged.
+- **Your key, your browser.** You paste your own IFM API key; it is stored only in your browser's localStorage and sent only to api.ifm.ai (whose CORS policy allows calls from this site). PaperLens has no backend and never sees it. Without a key, the checks still run on their own.
+- **No authorship scores.** The output reports descriptive before/after statistics (word counts, sentence-length variation), never an "AI probability" — the same philosophy as the style indicators.
 
 The pipeline lives in `shared/humanizer-core.mjs` with the provider in `shared/ifm-provider.mjs`; both are dependency-free and unit-tested with a mock model, and the verification layer was hardened against a real 6,300-word grant proposal (a repeated figure dropped by an early rewrite is what the multiset check now catches).
 
@@ -36,7 +36,7 @@ Nothing you paste for the checks is uploaded or stored. There is no backend, no 
 
 ```bash
 npm install
-npm test       # 55 tests: engine, extraction, citation check, humanizer, IFM provider
+npm test       # 54 tests: engine, extraction, citation check, humanizer, IFM provider
 npm run dev    # http://127.0.0.1:5173
 npm run build  # static output in dist/
 ```
@@ -65,7 +65,7 @@ shared/humanizer-core.mjs Rewrite pipeline: block parsing, protected spans,
 shared/ifm-provider.mjs   IFM chat-completions provider (OpenAI-compatible).
 src/App.tsx               The interface: editor, reference manager, report
                           tabs (incl. Citations), and the rewrite panel.
-tests/                    55 tests: engine, style checks, DOCX/PDF extraction,
+tests/                    54 tests: engine, style checks, DOCX/PDF extraction,
                           citation check incl. a real-world grant-proposal
                           reference list, humanizer protection/verification,
                           and the IFM provider against a stubbed fetch.

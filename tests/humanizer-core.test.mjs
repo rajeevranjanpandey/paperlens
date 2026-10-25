@@ -49,23 +49,33 @@ test("verifyRewrite catches a repeated figure quietly dropped (multiset check)",
   assert.equal(verifyRewrite(work, faithful, map).ok, true);
 });
 
-for (const mode of ["lite", "ultra", "premium"]) {
-  test(`humanizeText (${mode}) preserves protected spans and structure`, async () => {
-    const result = await humanizeText(SAMPLE, { mode, complete: createMockComplete() });
-    const joined = result.blocks.map((b) => b.output).join(" ");
-    for (const token of ["500", "95.5", "03/06/1991", "$45,000", "[12]"]) {
-      assert.ok(joined.includes(token), `${mode}: lost protected span ${token}`);
-    }
-    const list = result.blocks.find((b) => b.kind === "list");
-    assert.equal(list.status, "kept (structure)");
-    assert.ok(result.stats.rewritten >= 1, `${mode}: expected at least one rewritten block`);
-  });
-}
+test("humanizeText preserves protected spans and structure", async () => {
+  const result = await humanizeText(SAMPLE, { complete: createMockComplete() });
+  const joined = result.blocks.map((b) => b.output).join(" ");
+  for (const token of ["500", "95.5", "03/06/1991", "$45,000", "[12]"]) {
+    assert.ok(joined.includes(token), `lost protected span ${token}`);
+  }
+  const list = result.blocks.find((b) => b.kind === "list");
+  assert.equal(list.status, "kept (structure)");
+  assert.ok(result.stats.rewritten >= 1, "expected at least one rewritten block");
+});
 
 test("humanizeText keeps the original when every candidate fails checks", async () => {
   const badComplete = async (system) => (system.includes("JUDGE") ? "KEEP" : "Short text with no protected tokens at all.");
   const original = "The measured latency stayed below 200 ms across all 40 trials in the benchmark run.";
-  const result = await humanizeText(original, { mode: "ultra", complete: badComplete });
+  const result = await humanizeText(original, { complete: badComplete });
   assert.equal(result.blocks[0].output, original);
   assert.ok(result.blocks[0].status.startsWith("kept original"));
+});
+
+test("humanizeText falls back when the judge reports drift on both candidates", async () => {
+  const drifting = async (system, user) => {
+    if (system.includes("JUDGE_PICK")) return "A";
+    if (system.includes("JUDGE_DRIFT")) return "DRIFT";
+    return user.split("TEXT TO REWRITE:\n")[1].split("\n\nYour previous attempt")[0].trim();
+  };
+  const original = "The measured latency stayed below 200 ms across all 40 trials in the benchmark run.";
+  const result = await humanizeText(original, { complete: drifting });
+  assert.equal(result.blocks[0].output, original);
+  assert.ok(result.blocks[0].status.includes("drift"), result.blocks[0].status);
 });

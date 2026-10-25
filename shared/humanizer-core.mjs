@@ -147,7 +147,7 @@ async function judgeDrift(complete, original, finalText) {
   return !verdict.startsWith("DRIFT");
 }
 
-async function processBlock(block, mode, complete, styleNote = "") {
+async function processBlock(block, complete, styleNote = "") {
   if (block.kind !== "para") {
     return { kind: block.kind, original: block.original, output: block.original, status: "kept (structure)" };
   }
@@ -165,38 +165,33 @@ async function processBlock(block, mode, complete, styleNote = "") {
   const rewrite = async (temperature, stern = false) =>
     tidy(await complete(system, `TEXT TO REWRITE:\n${work}${stern ? STERN_SUFFIX : ""}`, temperature));
 
-  if (mode === "lite") {
-    const cand = await rewrite(0.8);
-    return verifyRewrite(work, cand, block.protectedMap).ok
-      ? done(cand, "rewritten")
-      : kept("kept original (safety check failed)");
-  }
-
-  if (mode === "ultra") {
-    for (const [temp, stern] of [[0.8, false], [0.8, true], [1.0, true]]) {
-      const cand = await rewrite(temp, stern);
-      if (verifyRewrite(work, cand, block.protectedMap).ok) {
-        return done(cand, stern ? "rewritten (after retry)" : "rewritten");
-      }
+  // The single pipeline, following the published methodology of
+  // superhumanizer.ai / humanizethis.io: split into paragraphs, lock the
+  // facts, generate candidates, verify mechanically, retry sterner, let a
+  // judge pick between two passing candidates, then drift-check the winner.
+  // A paragraph whose candidates all fail is returned unchanged.
+  const [candA, candB] = await Promise.all([rewrite(0.8), rewrite(1.0)]);
+  let verified = [candA, candB].filter((c) => verifyRewrite(work, c, block.protectedMap).ok);
+  let afterRetry = false;
+  if (!verified.length) {
+    const retry = await rewrite(0.8, true);
+    if (verifyRewrite(work, retry, block.protectedMap).ok) {
+      verified = [retry];
+      afterRetry = true;
     }
-    return kept("kept original (all candidates failed checks)");
   }
-
-  // premium: two candidates, judge pick, drift check, layered fallbacks
-  const [candA, candB] = await Promise.all([rewrite(0.7), rewrite(1.0)]);
-  const okA = verifyRewrite(work, candA, block.protectedMap).ok;
-  const okB = verifyRewrite(work, candB, block.protectedMap).ok;
-  if (!okA && !okB) return kept("kept original (all candidates failed checks)");
-  let winner, loser;
-  if (okA && okB) {
-    const pick = await judgePick(complete, work, candA, candB);
-    [winner, loser] = pick === "A" ? [candA, candB] : [candB, candA];
-  } else {
-    [winner, loser] = okA ? [candA, candB] : [candB, candA];
+  if (!verified.length) return kept("kept original (all candidates failed checks)");
+  let winner = verified[0];
+  let loser = verified[1];
+  if (verified.length === 2) {
+    const pick = await judgePick(complete, work, verified[0], verified[1]);
+    [winner, loser] = pick === "A" ? [verified[0], verified[1]] : [verified[1], verified[0]];
   }
-  if (await judgeDrift(complete, work, winner)) return done(winner, "rewritten (premium)");
-  if (verifyRewrite(work, loser, block.protectedMap).ok && (await judgeDrift(complete, work, loser))) {
-    return done(loser, "rewritten (premium, fallback candidate)");
+  if (await judgeDrift(complete, work, winner)) {
+    return done(winner, afterRetry ? "rewritten (after retry)" : "rewritten");
+  }
+  if (loser && (await judgeDrift(complete, work, loser))) {
+    return done(loser, "rewritten (fallback candidate)");
   }
   return kept("kept original (drift check failed)");
 }
@@ -215,22 +210,19 @@ async function pool(items, limit, fn) {
 }
 
 /**
- * Rewrite a document. `complete` is an injected model call:
+ * Rewrite a document with the single verification-first pipeline.
+ * `complete` is an injected model call:
  *   complete(system, user, temperature) -> Promise<string>
- * Modes: "lite" (one pass), "ultra" (pass + checks + retries),
- * "premium" (two candidates + judge pick + drift check).
- * Returns { mode, blocks: [{kind, original, output, status}], stats }.
+ * Returns { blocks: [{kind, original, output, status}], stats }.
  * @param {string} text
- * @param {{ mode?: string, complete: Function, styleNote?: string }} [options]
+ * @param {{ complete: Function, styleNote?: string }} [options]
  */
-export async function humanizeText(text, { mode = "ultra", complete, styleNote = "" } = {}) {
-  if (!["lite", "ultra", "premium"].includes(mode)) throw new Error(`unknown mode: ${mode}`);
+export async function humanizeText(text, { complete, styleNote = "" } = {}) {
   if (typeof complete !== "function") throw new Error("humanizeText needs a complete(system, user, temperature) function");
   const blocks = parseDocument(text);
-  const results = await pool(blocks, 4, (b) => processBlock(b, mode, complete, styleNote));
+  const results = await pool(blocks, 4, (b) => processBlock(b, complete, styleNote));
   const words = (s) => (s.trim() ? s.trim().split(/\s+/).length : 0);
   return {
-    mode,
     blocks: results,
     stats: {
       wordsIn: words(text),

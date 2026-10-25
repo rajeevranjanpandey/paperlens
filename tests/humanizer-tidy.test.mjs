@@ -11,7 +11,7 @@ test("stranded punctuation from a rewrite is tidied before delivery", async () =
     const work = user.split("TEXT TO REWRITE:\n")[1];
     return work.replace(", the platform", ",, the platform").replace("period.", "period .");
   };
-  const result = await humanizeText(original, { mode: "ultra", complete: sloppy });
+  const result = await humanizeText(original, { complete: sloppy });
   assert.equal(result.blocks[0].status, "rewritten");
   assert.equal(result.blocks[0].output, original);
   assert.ok(!result.blocks[0].output.includes(",,"));

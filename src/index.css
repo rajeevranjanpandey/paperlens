@@ -293,3 +293,7 @@ main { width: min(980px, 100% - 32px); margin: 0 auto; flex: 1; }
   .hz-panels { grid-template-columns: 1fr; }
   .hz-title { font-size: 23px; }
 }
+
+/* combined flow */
+.key-row { margin-top: 18px; }
+.method-note { margin-top: 12px; max-width: 720px; line-height: 1.55; }

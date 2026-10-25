@@ -11,10 +11,10 @@ test("a style note reaches the rewrite prompt but not the judge prompts", async 
     return user.split("TEXT TO REWRITE:\n")[1].trim();
   };
   const original = "The measured latency stayed below 200 ms across all 40 trials in the benchmark run.";
-  const result = await humanizeText(original, { mode: "premium", complete: spy, styleNote: "Use a relaxed, casual tone." });
+  const result = await humanizeText(original, { complete: spy, styleNote: "Use a relaxed, casual tone." });
   assert.equal(result.blocks[0].status.startsWith("rewritten"), true);
   const rewriteSystems = systems.filter((s) => s.includes("You rewrite text"));
-  assert.ok(rewriteSystems.length >= 2, "premium should issue two rewrite calls");
+  assert.ok(rewriteSystems.length >= 2, "the pipeline should issue two rewrite calls");
   assert.ok(rewriteSystems.every((s) => s.includes("Additional style instruction: Use a relaxed, casual tone.")));
   const judgeSystems = systems.filter((s) => s.includes("JUDGE"));
   assert.ok(judgeSystems.every((s) => !s.includes("casual tone")), "judges must not receive the style note");
