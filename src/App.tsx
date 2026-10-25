@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { analyze, SAMPLE_REFERENCES, similarityReport, styleIndicators } from "../shared/paper-core.mjs";
 import { extractText } from "../shared/extract-text.mjs";
-import { humanizeText } from "../shared/humanizer-core.mjs";
+import { humanizeText, estimateRewrite } from "../shared/humanizer-core.mjs";
 import { createIFMComplete, DEFAULT_IFM_MODEL } from "../shared/ifm-provider.mjs";
 import { citationCheck } from "../shared/citation-check.mjs";
 
@@ -56,6 +56,10 @@ export default function App() {
   const [rwResult, setRwResult] = useState<any>(null);
   const [rwAccepted, setRwAccepted] = useState<boolean[]>([]);
   const [rwCopied, setRwCopied] = useState(false);
+  const [rwProgress, setRwProgress] = useState<{ done: number; total: number } | null>(null);
+  const [rwConfirm, setRwConfirm] = useState(false);
+  const [rwEstimate, setRwEstimate] = useState<{ blocks: number; paragraphs: number; approxCalls: number } | null>(null);
+  const rwAbort = useRef<AbortController | null>(null);
 
   const activeRefs = useMemo(() => refs.filter((r) => r.builtin === useSamples || !r.builtin), [refs, useSamples]);
 
@@ -132,20 +136,37 @@ export default function App() {
   const runRewrite = async () => {
     setRwBusy(true);
     setRwError("");
+    const controller = new AbortController();
+    rwAbort.current = controller;
+    setRwProgress({ done: 0, total: estimateRewrite(text).blocks });
     try {
-      const res = await humanizeText(text, { complete: makeComplete() });
+      const res = await humanizeText(text, {
+        complete: makeComplete(),
+        signal: controller.signal,
+        onProgress: (done: number, total: number) => setRwProgress({ done, total }),
+      });
       setRwResult(res);
       setRwAccepted(res.blocks.map((b: any) => b.status.startsWith("rewritten")));
     } catch (e: any) {
       setRwError(e?.message || String(e));
     }
+    setRwProgress(null);
     setRwBusy(false);
   };
 
   // One flow: run the local checks, and the rewrite too when a key is present.
+  // Long documents (>20 paragraphs) ask first - a full paper can mean
+  // hundreds of model calls against the user's own quota.
   const runAll = () => {
     run();
-    if (ifmKey.trim()) void runRewrite();
+    if (!ifmKey.trim()) return;
+    const est = estimateRewrite(text);
+    if (est.paragraphs > 20) {
+      setRwEstimate(est);
+      setRwConfirm(true);
+      return;
+    }
+    void runRewrite();
   };
 
   const redoBlock = async (i: number) => {
@@ -346,6 +367,22 @@ export default function App() {
             twice, the versions are checked mechanically (facts, number counts, length), a judge keeps the more faithful one, and a final drift check can still
             reject it — anything that fails comes back unchanged.
           </p>
+          {rwConfirm && rwEstimate && (
+            <div className="confirm-row">
+              <p className="muted small">
+                This is a long document: about {rwEstimate.paragraphs} paragraphs ≈ {rwEstimate.approxCalls}+ model calls against your IFM quota, and it can
+                take several minutes. The checks above have already run.
+              </p>
+              <div className="hz-input-actions">
+                <button type="button" className="btn-primary" onClick={() => { setRwConfirm(false); void runRewrite(); }}>
+                  Rewrite anyway
+                </button>
+                <button type="button" className="btn-ghost" onClick={() => setRwConfirm(false)}>
+                  Skip the rewrite
+                </button>
+              </div>
+            </div>
+          )}
           {fileNote && <p className={`file-note ${/Could not|no text|scan|not supported|zip/i.test(fileNote) ? "bad" : ""}`} role="status">{fileNote}</p>}
         </section>
 
@@ -357,7 +394,24 @@ export default function App() {
                 How it works
               </a>
             </div>
-            {rwBusy && !rwResult && <p className="muted">Rewriting paragraph by paragraph — each one is verified before it is kept…</p>}
+            {rwBusy && (
+              <div className="rw-progress">
+                <div className="progress">
+                  <div
+                    className="bar"
+                    style={{ width: `${rwProgress ? Math.round((rwProgress.done / Math.max(rwProgress.total, 1)) * 100) : 0}%` }}
+                  />
+                </div>
+                <div className="hz-panel-foot">
+                  <span className="muted small">
+                    {rwProgress ? `Rewriting… block ${rwProgress.done} of ${rwProgress.total}` : "Rewriting…"}
+                  </span>
+                  <button type="button" className="btn-ghost" onClick={() => rwAbort.current?.abort()}>
+                    Cancel rewrite
+                  </button>
+                </div>
+              </div>
+            )}
             {rwError && <p className="file-note bad" role="alert">{rwError}</p>}
             {rwResult && (
               <>
@@ -365,6 +419,9 @@ export default function App() {
                   {rwResult.stats.wordsIn} words in → {rwResult.stats.wordsOut} out · {rwResult.stats.rewritten} rewritten, {rwResult.stats.kept} kept
                   {rwCvBefore != null && rwCvAfter != null ? ` · sentence-length variation ${rwCvBefore.toFixed(2)} → ${rwCvAfter.toFixed(2)}` : ""}
                 </p>
+                {rwResult.stats.cancelled && (
+                  <p className="file-note">Rewrite cancelled partway — blocks that were not run kept their original text, marked “not run (cancelled)” below.</p>
+                )}
                 <div className="hz-out-text">{composedOutput}</div>
                 <div className="hz-panel-foot">
                   <button type="button" className="btn-ghost" onClick={() => void copyOutput()}>

@@ -23,18 +23,19 @@ function cleanContent(content) {
  * Build a complete(system, user, temperature) function backed by IFM.
  * Throws an Error with a readable message on HTTP or shape problems.
  * @param {{ apiKey: string, baseUrl?: string, model?: string, fetchImpl?: Function }} opts
- * @returns {(system: string, user: string, temperature?: number) => Promise<string>}
+ * @returns {(system: string, user: string, temperature?: number, signal?: AbortSignal) => Promise<string>}
  */
 export function createIFMComplete({ apiKey, baseUrl = DEFAULT_IFM_BASE_URL, model = DEFAULT_IFM_MODEL, fetchImpl } = {}) {
   if (!apiKey) throw new Error("An IFM API key is required.");
   const doFetch = fetchImpl || ((...args) => fetch(...args));
   const root = baseUrl.replace(/\/$/, "");
-  return async (system, user, temperature = 0.8) => {
+  return async (system, user, temperature = 0.8, signal = undefined) => {
     let resp;
     try {
       resp = await doFetch(`${root}/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        signal,
         body: JSON.stringify({
           model,
           messages: [

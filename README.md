@@ -1,6 +1,6 @@
 # PaperLens
 
-[![Deploy to GitHub Pages](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml/badge.svg)](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml) [![Tests](https://img.shields.io/badge/tests-61%2F61%20passing-brightgreen)](tests)
+[![Deploy to GitHub Pages](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml/badge.svg)](https://github.com/rajeevranjanpandey/paperlens/actions/workflows/pages.yml) [![Tests](https://img.shields.io/badge/tests-66%2F66%20passing-brightgreen)](tests)
 
 Check a draft before you submit it. Paste or upload a paper (.txt, .md, .pdf or .docx) and PaperLens reports the following, entirely in your browser. An optional rewrite tool (bring your own IFM key) is the single exception, described below.
 
@@ -21,6 +21,7 @@ The one feature that talks to a network — and it is part of the same single fl
 - **Protected spans.** Numbers, dates, URLs, emails and citations are swapped for placeholders before the model sees the text and restored afterwards.
 - **Two candidates per paragraph.** Each paragraph is rewritten twice in parallel; candidates must keep every protected span exactly, keep the document's number counts identical (multiset check), and stay within a length band — otherwise they are rejected, with one sterner retry.
 - **Judge + drift check.** A judge call keeps the more faithful of two passing candidates, and a final drift check can still reject the winner. A paragraph whose candidates all fail is returned unchanged.
+- **Scale guardrails.** A progress bar counts blocks as they finish, with a Cancel button that stops new work (finished paragraphs are kept, the rest are marked "not run (cancelled)"). Documents over 20 paragraphs ask first, with an estimate of the model calls involved (~4 per paragraph) — a full paper can mean hundreds of calls against your own quota.
 - **Your key, your browser.** You paste your own IFM API key; it is stored only in your browser's localStorage and sent only to api.ifm.ai (whose CORS policy allows calls from this site). PaperLens has no backend and never sees it. Without a key, the checks still run on their own.
 - **No authorship scores.** The output reports descriptive before/after statistics (word counts, sentence-length variation), never an "AI probability" — the same philosophy as the style indicators.
 
@@ -36,7 +37,7 @@ Nothing you paste for the checks is uploaded or stored. There is no backend, no 
 
 ```bash
 npm install
-npm test       # 61 tests: engine, extraction, citation check, humanizer, IFM provider, adversarial, extraction, citation check, humanizer, IFM provider
+npm test       # 66 tests: engine, extraction, citations, humanizer, provider, adversarial, guardrails
 npm run dev    # http://127.0.0.1:5173
 npm run build  # static output in dist/
 ```
@@ -65,7 +66,7 @@ shared/humanizer-core.mjs Rewrite pipeline: block parsing, protected spans,
 shared/ifm-provider.mjs   IFM chat-completions provider (OpenAI-compatible).
 src/App.tsx               The interface: editor, reference manager, report
                           tabs (incl. Citations), and the rewrite panel.
-tests/                    61 tests: engine, style checks, DOCX/PDF extraction,
+tests/                    66 tests: engine, style checks, DOCX/PDF extraction,
                           citation check incl. a real-world grant-proposal
                           reference list, humanizer protection/verification,
                           and the IFM provider against a stubbed fetch.

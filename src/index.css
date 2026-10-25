@@ -297,3 +297,8 @@ main { width: min(980px, 100% - 32px); margin: 0 auto; flex: 1; }
 /* combined flow */
 .key-row { margin-top: 18px; }
 .method-note { margin-top: 12px; max-width: 720px; line-height: 1.55; }
+
+/* scale guardrails */
+.confirm-row { margin-top: 14px; border: 1px solid var(--warn); background: #b07a0014; border-radius: 12px; padding: 12px 14px; display: grid; gap: 10px; }
+.rw-progress { display: grid; gap: 8px; margin-bottom: 12px; }
+.rw-progress .hz-panel-foot { margin-top: 0; }

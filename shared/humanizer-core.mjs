@@ -168,19 +168,19 @@ export function verifyRewrite(originalWork, candidate, protectedMap) {
 
 /* --------------------------- orchestration --------------------------- */
 
-async function judgePick(complete, original, candA, candB) {
+async function judgePick(complete, original, candA, candB, signal = undefined) {
   const user = `ORIGINAL:\n${original}\n\nCANDIDATE A:\n${candA}\n\nCANDIDATE B:\n${candB}`;
-  const verdict = (await complete(PICK_SYSTEM, user, 0)).trim().toUpperCase();
+  const verdict = (await complete(PICK_SYSTEM, user, 0, signal)).trim().toUpperCase();
   return verdict.startsWith("B") ? "B" : "A";
 }
 
-async function judgeDrift(complete, original, finalText) {
+async function judgeDrift(complete, original, finalText, signal = undefined) {
   const user = `ORIGINAL:\n${original}\n\nREWRITE:\n${finalText}`;
-  const verdict = (await complete(DRIFT_SYSTEM, user, 0)).trim().toUpperCase();
+  const verdict = (await complete(DRIFT_SYSTEM, user, 0, signal)).trim().toUpperCase();
   return !verdict.startsWith("DRIFT");
 }
 
-async function processBlock(block, complete, styleNote = "") {
+async function processBlock(block, complete, styleNote = "", signal = undefined) {
   if (block.kind !== "para") {
     return { kind: block.kind, original: block.original, output: block.original, status: "kept (structure)" };
   }
@@ -196,46 +196,55 @@ async function processBlock(block, complete, styleNote = "") {
   const tidy = (s) => s.replace(/,(\s*),/g, ",").replace(/\s+([.,;:!?])/g, "$1").trim();
   const system = styleNote ? `${REWRITE_SYSTEM}\n\nAdditional style instruction: ${styleNote}` : REWRITE_SYSTEM;
   const rewrite = async (temperature, stern = false) =>
-    tidy(await complete(system, `TEXT TO REWRITE:\n${work}${stern ? STERN_SUFFIX : ""}`, temperature));
+    tidy(await complete(system, `TEXT TO REWRITE:\n${work}${stern ? STERN_SUFFIX : ""}`, temperature, signal));
 
   // The single pipeline, following the published methodology of
   // superhumanizer.ai / humanizethis.io: split into paragraphs, lock the
   // facts, generate candidates, verify mechanically, retry sterner, let a
   // judge pick between two passing candidates, then drift-check the winner.
   // A paragraph whose candidates all fail is returned unchanged.
-  const [candA, candB] = await Promise.all([rewrite(0.8), rewrite(1.0)]);
-  let verified = [candA, candB].filter((c) => verifyRewrite(work, c, block.protectedMap).ok);
-  let afterRetry = false;
-  if (!verified.length) {
-    const retry = await rewrite(0.8, true);
-    if (verifyRewrite(work, retry, block.protectedMap).ok) {
-      verified = [retry];
-      afterRetry = true;
+  try {
+    const [candA, candB] = await Promise.all([rewrite(0.8), rewrite(1.0)]);
+    if (signal?.aborted) return kept("not run (cancelled)");
+    let verified = [candA, candB].filter((c) => verifyRewrite(work, c, block.protectedMap).ok);
+    let afterRetry = false;
+    if (!verified.length) {
+      const retry = await rewrite(0.8, true);
+      if (verifyRewrite(work, retry, block.protectedMap).ok) {
+        verified = [retry];
+        afterRetry = true;
+      }
     }
+    if (!verified.length) return kept("kept original (all candidates failed checks)");
+    let winner = verified[0];
+    let loser = verified[1];
+    if (verified.length === 2) {
+      const pick = await judgePick(complete, work, verified[0], verified[1], signal);
+      [winner, loser] = pick === "A" ? [verified[0], verified[1]] : [verified[1], verified[0]];
+    }
+    if (await judgeDrift(complete, work, winner, signal)) {
+      return done(winner, afterRetry ? "rewritten (after retry)" : "rewritten");
+    }
+    if (loser && (await judgeDrift(complete, work, loser, signal))) {
+      return done(loser, "rewritten (fallback candidate)");
+    }
+    return kept("kept original (drift check failed)");
+  } catch (e) {
+    if (signal?.aborted) return kept("not run (cancelled)");
+    throw e;
   }
-  if (!verified.length) return kept("kept original (all candidates failed checks)");
-  let winner = verified[0];
-  let loser = verified[1];
-  if (verified.length === 2) {
-    const pick = await judgePick(complete, work, verified[0], verified[1]);
-    [winner, loser] = pick === "A" ? [verified[0], verified[1]] : [verified[1], verified[0]];
-  }
-  if (await judgeDrift(complete, work, winner)) {
-    return done(winner, afterRetry ? "rewritten (after retry)" : "rewritten");
-  }
-  if (loser && (await judgeDrift(complete, work, loser))) {
-    return done(loser, "rewritten (fallback candidate)");
-  }
-  return kept("kept original (drift check failed)");
 }
 
-async function pool(items, limit, fn) {
+async function pool(items, limit, fn, onProgress) {
   const out = new Array(items.length);
   let next = 0;
+  let doneCount = 0;
   async function worker() {
     while (next < items.length) {
       const i = next++;
       out[i] = await fn(items[i]);
+      doneCount++;
+      onProgress?.(doneCount, items.length);
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
@@ -243,17 +252,41 @@ async function pool(items, limit, fn) {
 }
 
 /**
+ * Estimate the scale of a rewrite before running it: block/paragraph
+ * counts and the approximate number of model calls (~4 per paragraph:
+ * two candidates, a judge pick and a drift check; retries add more).
+ */
+export function estimateRewrite(text) {
+  const blocks = parseDocument(text);
+  const paragraphs = blocks.filter((b) => b.kind === "para").length;
+  return { blocks: blocks.length, paragraphs, approxCalls: paragraphs * 4 };
+}
+
+/**
  * Rewrite a document with the single verification-first pipeline.
  * `complete` is an injected model call:
- *   complete(system, user, temperature) -> Promise<string>
+ *   complete(system, user, temperature, signal?) -> Promise<string>
+ * Options: styleNote (extra instruction), signal (AbortSignal - blocks not
+ * yet started, and blocks whose model call aborts, come back as
+ * "not run (cancelled)" with the original text), onProgress(done, total).
  * Returns { blocks: [{kind, original, output, status}], stats }.
  * @param {string} text
- * @param {{ complete: Function, styleNote?: string }} [options]
+ * @param {{ complete: Function, styleNote?: string, signal?: AbortSignal, onProgress?: Function }} [options]
  */
-export async function humanizeText(text, { complete, styleNote = "" } = {}) {
+export async function humanizeText(text, { complete, styleNote = "", signal = undefined, onProgress = undefined } = {}) {
   if (typeof complete !== "function") throw new Error("humanizeText needs a complete(system, user, temperature) function");
   const blocks = parseDocument(text);
-  const results = await pool(blocks, 4, (b) => processBlock(b, complete, styleNote));
+  const results = await pool(
+    blocks,
+    4,
+    (b) => {
+      if (signal?.aborted && b.kind === "para") {
+        return { kind: b.kind, original: b.original, output: b.original, status: "not run (cancelled)" };
+      }
+      return processBlock(b, complete, styleNote, signal);
+    },
+    onProgress
+  );
   const words = (s) => (s.trim() ? s.trim().split(/\s+/).length : 0);
   return {
     blocks: results,
@@ -263,6 +296,7 @@ export async function humanizeText(text, { complete, styleNote = "" } = {}) {
       blocks: results.length,
       rewritten: results.filter((r) => r.status.startsWith("rewritten")).length,
       kept: results.filter((r) => r.status.startsWith("kept")).length,
+      cancelled: results.some((r) => r.status === "not run (cancelled)"),
     },
   };
 }
