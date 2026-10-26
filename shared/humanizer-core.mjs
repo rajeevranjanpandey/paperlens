@@ -140,6 +140,15 @@ number, name or claim compared with the original. Tokens like [[P0]] are
 protected data and count as unchanged. Reply with exactly one word:
 KEEP if the meaning is fully preserved, DRIFT if anything factual changed.`;
 
+export const PROOFREAD_SYSTEM = `You proofread text: you correct errors and change nothing else.
+
+Rules:
+- Fix ONLY grammar mistakes, spelling errors, punctuation errors, capitalisation slips and obvious typos (a duplicated word, a missing word).
+- Keep every sentence, in the same order, with the same structure. Where the wording is already correct, copy it exactly: never substitute synonyms, never rephrase for style, never split or merge sentences, never change the tone or level of formality.
+- Keep every fact, claim, name and number exactly. Tokens like [[P0]] are protected data: copy them byte-identical, never expand, move or drop them.
+- Keep the same language as the original and almost exactly the same length.
+- Output ONLY the corrected text, no preamble, no quotes, no list of changes.`;
+
 /* --------------------------- verification --------------------------- */
 
 /** Mechanical checks on a candidate rewrite (no model involved). */
@@ -198,6 +207,18 @@ export function verifyRewrite(originalWork, candidate, protectedMap) {
 export const MAX_OVERLAP = 0.7;
 export const OVERLAP_MIN_WORDS = 25;
 
+/**
+ * Proofreading gates - the mirror image of the rewrite's depth gate.
+ * Where a rewrite candidate is rejected for staying too close to the
+ * original, a proofread candidate is rejected for straying from it: it
+ * must keep at least PROOFREAD_MIN_OVERLAP of the original's wording
+ * (in order) and stay inside a tight length band, on top of the same
+ * protected-span and number-multiset checks every candidate must pass.
+ */
+export const PROOFREAD_MIN_OVERLAP = 0.85;
+export const PROOFREAD_MIN_LENGTH = 0.9;
+export const PROOFREAD_MAX_LENGTH = 1.1;
+
 export function verbatimOverlap(original, candidate) {
   const words = (s) => s.toLowerCase().replace(/[^a-z0-9%\s.]/g, " ").split(/\s+/).filter(Boolean);
   const a = words(original);
@@ -216,6 +237,13 @@ export function verbatimOverlap(original, candidate) {
 }
 
 /* --------------------------- orchestration --------------------------- */
+
+// Cosmetic only: models sometimes strand punctuation around a restored
+// token ("word ,, next"). Facts are untouched - verification still runs
+// on exactly this text.
+function tidyText(s) {
+  return s.replace(/,(\s*),/g, ",").replace(/\s+([.,;:!?])/g, "$1").trim();
+}
 
 async function judgePick(complete, original, candA, candB, signal = undefined) {
   const user = `ORIGINAL:\n${original}\n\nCANDIDATE A:\n${candA}\n\nCANDIDATE B:\n${candB}`;
@@ -239,13 +267,9 @@ async function processBlock(block, complete, styleNote = "", signal = undefined)
     output: restoreText(candidateWork, block.protectedMap), status,
   });
   const kept = (status) => ({ kind: block.kind, original: block.original, output: block.original, status });
-  // Cosmetic only: models sometimes strand punctuation around a restored
-  // token ("word ,, next"). Facts are untouched - verification still runs
-  // on exactly this text.
-  const tidy = (s) => s.replace(/,(\s*),/g, ",").replace(/\s+([.,;:!?])/g, "$1").trim();
   const system = styleNote ? `${REWRITE_SYSTEM}\n\nAdditional style instruction: ${styleNote}` : REWRITE_SYSTEM;
   const rewrite = async (temperature, suffix = "") =>
-    tidy(await complete(system, `TEXT TO REWRITE:\n${work}${suffix}`, temperature, signal));
+    tidyText(await complete(system, `TEXT TO REWRITE:\n${work}${suffix}`, temperature, signal));
 
   // The single pipeline, following the published methodology of
   // superhumanizer.ai / humanizethis.io: split into paragraphs, lock the
@@ -336,6 +360,48 @@ async function processBlock(block, complete, styleNote = "", signal = undefined)
   }
 }
 
+/**
+ * Proofread one block: fix errors, change nothing else. The prompt asks
+ * for restraint, but the gates enforce it - a candidate is applied only
+ * if it passes verifyRewrite (protected spans restored exactly, number
+ * multiset identical), stays within the proofread length band, keeps at
+ * least PROOFREAD_MIN_OVERLAP of the original wording, and passes the
+ * drift judge. Anything else returns the paragraph unchanged.
+ */
+async function proofreadBlock(block, complete, signal = undefined) {
+  if (block.kind !== "para") {
+    return { kind: block.kind, original: block.original, output: block.original, status: "kept (structure)" };
+  }
+  const work = block.workText;
+  const done = (candidateWork) => ({
+    kind: block.kind, original: block.original,
+    output: restoreText(candidateWork, block.protectedMap), status: "proofread",
+  });
+  const kept = (status) => ({ kind: block.kind, original: block.original, output: block.original, status });
+  const correct = async (temperature) =>
+    tidyText(await complete(PROOFREAD_SYSTEM, `TEXT TO PROOFREAD:\n${work}`, temperature, signal));
+  const acceptable = (c) => {
+    if (!verifyRewrite(work, c, block.protectedMap).ok) return false;
+    const ratio = c.length / Math.max(work.length, 1);
+    if (ratio < PROOFREAD_MIN_LENGTH || ratio > PROOFREAD_MAX_LENGTH) return false;
+    return verbatimOverlap(block.original, restoreText(c, block.protectedMap)) >= PROOFREAD_MIN_OVERLAP;
+  };
+  try {
+    // Two low-temperature draws are enough: proofreading wants the most
+    // conservative correction, not creative variety.
+    const candidates = [...new Set(await Promise.all([correct(0.2), correct(0.4)]))];
+    if (signal?.aborted) return kept("not run (cancelled)");
+    const passing = candidates.filter(acceptable);
+    for (const c of passing) {
+      if (await judgeDrift(complete, work, c, signal)) return done(c);
+    }
+    return kept(passing.length ? "kept original (drift check failed)" : "kept original (proofread would deviate)");
+  } catch (e) {
+    if (signal?.aborted) return kept("not run (cancelled)");
+    throw e;
+  }
+}
+
 async function pool(items, limit, fn, onProgress) {
   const out = new Array(items.length);
   let next = 0;
@@ -365,6 +431,45 @@ export function estimateRewrite(text) {
 }
 
 /**
+ * Estimate the scale of a proofread run (~3 model calls per paragraph:
+ * two candidates and a drift check).
+ */
+export function estimateProofread(text) {
+  const blocks = parseDocument(text);
+  const paragraphs = blocks.filter((b) => b.kind === "para").length;
+  return { blocks: blocks.length, paragraphs, approxCalls: paragraphs * 3 };
+}
+
+/** Shared document runner for the rewrite and proofread pipelines. */
+async function runDocument(text, processFn, { signal = undefined, onProgress = undefined } = {}) {
+  const blocks = parseDocument(text);
+  const results = await pool(
+    blocks,
+    4,
+    (b) => {
+      if (signal?.aborted && b.kind === "para") {
+        return { kind: b.kind, original: b.original, output: b.original, status: "not run (cancelled)" };
+      }
+      return processFn(b);
+    },
+    onProgress
+  );
+  const words = (s) => (s.trim() ? s.trim().split(/\s+/).length : 0);
+  return {
+    blocks: results,
+    stats: {
+      wordsIn: words(text),
+      wordsOut: words(results.map((r) => r.output).join(" ")),
+      blocks: results.length,
+      rewritten: results.filter((r) => r.status.startsWith("rewritten")).length,
+      proofread: results.filter((r) => r.status === "proofread").length,
+      kept: results.filter((r) => r.status.startsWith("kept")).length,
+      cancelled: results.some((r) => r.status === "not run (cancelled)"),
+    },
+  };
+}
+
+/**
  * Rewrite a document with the single verification-first pipeline.
  * `complete` is an injected model call:
  *   complete(system, user, temperature, signal?) -> Promise<string>
@@ -377,30 +482,22 @@ export function estimateRewrite(text) {
  */
 export async function humanizeText(text, { complete, styleNote = "", signal = undefined, onProgress = undefined } = {}) {
   if (typeof complete !== "function") throw new Error("humanizeText needs a complete(system, user, temperature) function");
-  const blocks = parseDocument(text);
-  const results = await pool(
-    blocks,
-    4,
-    (b) => {
-      if (signal?.aborted && b.kind === "para") {
-        return { kind: b.kind, original: b.original, output: b.original, status: "not run (cancelled)" };
-      }
-      return processBlock(b, complete, styleNote, signal);
-    },
-    onProgress
-  );
-  const words = (s) => (s.trim() ? s.trim().split(/\s+/).length : 0);
-  return {
-    blocks: results,
-    stats: {
-      wordsIn: words(text),
-      wordsOut: words(results.map((r) => r.output).join(" ")),
-      blocks: results.length,
-      rewritten: results.filter((r) => r.status.startsWith("rewritten")).length,
-      kept: results.filter((r) => r.status.startsWith("kept")).length,
-      cancelled: results.some((r) => r.status === "not run (cancelled)"),
-    },
-  };
+  return runDocument(text, (b) => processBlock(b, complete, styleNote, signal), { signal, onProgress });
+}
+
+/**
+ * Proofread a document: grammar, spelling and punctuation fixes only,
+ * each one gated so the text cannot deviate from the original (see
+ * proofreadBlock). Same options and return shape as humanizeText
+ * (minus styleNote); successful blocks come back with status
+ * "proofread", rejected ones with "kept original (proofread would
+ * deviate)" and their original text.
+ * @param {string} text
+ * @param {{ complete: Function, signal?: AbortSignal, onProgress?: Function }} [options]
+ */
+export async function proofreadText(text, { complete, signal = undefined, onProgress = undefined } = {}) {
+  if (typeof complete !== "function") throw new Error("proofreadText needs a complete(system, user, temperature) function");
+  return runDocument(text, (b) => proofreadBlock(b, complete, signal), { signal, onProgress });
 }
 
 /** Deterministic mock model call - pipeline plumbing tests only. */

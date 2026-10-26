@@ -236,6 +236,11 @@ main { width: min(980px, 100% - 32px); margin: 0 auto; flex: 1; }
 .rw-col p { margin-top: 6px; white-space: pre-wrap; }
 .rw-col.out { background: #f4f8f6; border-left: 1px solid var(--line); }
 .rw-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 14px; border-top: 1px solid var(--line); }
+.rw-legend { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.hl-changed { background: #c9ecd6; }
+.mark-changed { background: #c9ecd6; color: #14532d; border-radius: 3px; padding: 0 1px; }
+.pill-ok { background: #2e7d4f22; color: #14532d; }
+.pill-kept { background: #62685f1a; color: var(--ink-2); }
 @media (max-width: 720px) {
   .rw-cols { grid-template-columns: 1fr; }
   .rw-col.out { border-left: none; border-top: 1px solid var(--line); }

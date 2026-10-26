@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { analyze, styleIndicators } from "../shared/paper-core.mjs";
 import { extractText } from "../shared/extract-text.mjs";
-import { humanizeText, estimateRewrite } from "../shared/humanizer-core.mjs";
+import { humanizeText, proofreadText, estimateRewrite, estimateProofread } from "../shared/humanizer-core.mjs";
+import { wordDiff, changedRatio } from "../shared/word-diff.mjs";
 import { createIFMComplete, DEFAULT_IFM_MODEL } from "../shared/ifm-provider.mjs";
 import { citationCheck } from "../shared/citation-check.mjs";
 
@@ -32,6 +33,31 @@ function clearDraft() {
 
 const fmtPct = (n: number | null | undefined) => (n == null ? "–" : `${n.toFixed(1)}%`);
 
+// Status pill colour by outcome: green for a completed rewrite or
+// proofread, neutral for text kept as-is, amber for blocks the run
+// never reached.
+const pillClass = (status: string) =>
+  status.startsWith("rewritten") || status === "proofread"
+    ? "pill pill-ok"
+    : status === "not run (cancelled)"
+      ? "pill pill-warn"
+      : "pill pill-kept";
+
+// A rewritten paragraph with the changed wording highlighted in green.
+function HighlightedText({ original, output }: { original: string; output: string }) {
+  const tokens = wordDiff(original, output);
+  return (
+    <>
+      {tokens.map((t: any, k: number) => (
+        <Fragment key={k}>
+          {k > 0 ? " " : ""}
+          {t.changed ? <mark className="mark-changed">{t.text}</mark> : t.text}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
 export default function App() {
   const [text, setText] = useState(() => loadJSON("pl.draft", ""));
   const [target, setTarget] = useState<number>(() => loadJSON("pl.target", 0) || 0);
@@ -55,6 +81,10 @@ export default function App() {
   const [rwProgress, setRwProgress] = useState<{ done: number; total: number } | null>(null);
   const [rwConfirm, setRwConfirm] = useState(false);
   const [rwEstimate, setRwEstimate] = useState<{ blocks: number; paragraphs: number; approxCalls: number } | null>(null);
+  // Which transform produced (or is producing) the result panel: the
+  // breakdown, progress text and labels all adapt to it.
+  const [rwMode, setRwMode] = useState<"rewrite" | "proofread">("rewrite");
+  const [rwPendingMode, setRwPendingMode] = useState<"rewrite" | "proofread">("rewrite");
   const rwAbort = useRef<AbortController | null>(null);
 
   // Standalone citation check: a first-class section on the main page, not
@@ -120,25 +150,50 @@ export default function App() {
 
   const makeComplete = () => createIFMComplete({ apiKey: ifmKey.trim(), model: ifmModel.trim() || DEFAULT_IFM_MODEL });
 
-  const runRewrite = async () => {
+  const runTransform = async (mode: "rewrite" | "proofread") => {
+    setRwMode(mode);
     setRwBusy(true);
     setRwError("");
     const controller = new AbortController();
     rwAbort.current = controller;
-    setRwProgress({ done: 0, total: estimateRewrite(text).blocks });
+    setRwProgress({ done: 0, total: (mode === "proofread" ? estimateProofread(text) : estimateRewrite(text)).blocks });
     try {
-      const res = await humanizeText(text, {
+      const run = (mode === "proofread" ? proofreadText : humanizeText) as typeof humanizeText;
+      const res = await run(text, {
         complete: makeComplete(),
         signal: controller.signal,
         onProgress: (done: number, total: number) => setRwProgress({ done, total }),
       });
       setRwResult(res);
-      setRwAccepted(res.blocks.map((b: any) => b.status.startsWith("rewritten")));
+      setRwAccepted(res.blocks.map((b: any) => b.status.startsWith("rewritten") || b.status === "proofread"));
     } catch (e: any) {
       setRwError(e?.message || String(e));
     }
     setRwProgress(null);
     setRwBusy(false);
+  };
+
+  const runRewrite = () => runTransform("rewrite");
+
+  // Proofread: the cautious counterpart of the rewrite - same input,
+  // same key and settings, but the core gates every correction so the
+  // wording cannot drift from the original.
+  const startProofread = () => {
+    if (!text.trim()) return;
+    if (!ifmKey.trim()) {
+      setRwError(
+        "Proofreading needs an IFM API key - add one in the key field above (the same key the rewrite uses). The checks run without a key; proofreading, like the rewrite, calls the model."
+      );
+      return;
+    }
+    const est = estimateProofread(text);
+    if (est.paragraphs > 20) {
+      setRwEstimate(est);
+      setRwPendingMode("proofread");
+      setRwConfirm(true);
+      return;
+    }
+    void runTransform("proofread");
   };
 
   // One flow: run the local checks, and the rewrite too when a key is present.
@@ -150,6 +205,7 @@ export default function App() {
     const est = estimateRewrite(text);
     if (est.paragraphs > 20) {
       setRwEstimate(est);
+      setRwPendingMode("rewrite");
       setRwConfirm(true);
       return;
     }
@@ -161,7 +217,8 @@ export default function App() {
     setRwBusy(true);
     setRwError("");
     try {
-      const res = await humanizeText(rwResult.blocks[i].original, { complete: makeComplete() });
+      const run = (rwMode === "proofread" ? proofreadText : humanizeText) as typeof humanizeText;
+      const res = await run(rwResult.blocks[i].original, { complete: makeComplete() });
       const fresh = res.blocks.find((b: any) => b.kind === "para") || res.blocks[0];
       setRwResult((prev: any) => {
         const blocks = [...prev.blocks];
@@ -170,7 +227,7 @@ export default function App() {
       });
       setRwAccepted((prev) => {
         const next = [...prev];
-        next[i] = fresh.status.startsWith("rewritten");
+        next[i] = fresh.status.startsWith("rewritten") || fresh.status === "proofread";
         return next;
       });
     } catch (e: any) {
@@ -313,7 +370,7 @@ export default function App() {
 
           <details className="refs key-help">
             <summary>
-              How to get an IFM API key <span className="muted">(only the rewrite needs one — every check above runs without it)</span>
+              How to get an IFM API key <span className="muted">(only the rewrite and proofread need one — every check above runs without it)</span>
             </summary>
             <div className="refs-body">
               <ol className="key-steps">
@@ -330,7 +387,7 @@ export default function App() {
                 </li>
                 <li>
                   Paste the key into the <strong>IFM API key</strong> field above. The default model (<code>IFM/K2-Horizon-375B-A23B</code>) is already filled
-                  in — that's all the setup the rewrite needs.
+                  in — that's all the setup the rewrite and proofread need.
                 </li>
               </ol>
               <p className="muted small">
@@ -346,28 +403,36 @@ export default function App() {
 
           <div className="run-row">
             <button type="button" className="btn-primary btn-lg" onClick={runAll} disabled={!text.trim() || busy || rwBusy}>
-              {busy ? "Reading file…" : rwBusy ? "Checking & rewriting…" : "Analyze & Rewrite"}
+              {busy ? "Reading file…" : rwBusy ? (rwMode === "proofread" ? "Proofreading…" : "Checking & rewriting…") : "Analyze & Rewrite"}
+            </button>
+            <button type="button" className="btn-ghost btn-lg" onClick={startProofread} disabled={!text.trim() || busy || rwBusy}>
+              Proofread
             </button>
             {ranAt && report && <span className="muted small">Checked locally {new Date(ranAt).toLocaleTimeString()}</span>}
-            {!ifmKey.trim() && <span className="muted small">No key? The checks still run — add an IFM key above to also rewrite.</span>}
+            {!ifmKey.trim() && <span className="muted small">No key? The checks still run — add an IFM key above to also rewrite or proofread.</span>}
           </div>
           <p className="muted small method-note">
             How the rewrite works: your text is split into paragraphs; numbers, dates and citations are locked so they cannot change; each paragraph is rewritten
             four times, the versions are checked mechanically (facts, number counts, length, and depth — near-verbatim trims are rejected), the deepest faithful
             version wins a judge round, and a final drift check can still reject it — anything that fails comes back unchanged.
           </p>
+          <p className="muted small method-note">
+            Proofread is the cautious opposite: it fixes grammar, spelling and punctuation only. A correction is applied only when mechanical checks confirm
+            every number and citation is untouched, the length barely moved, at least 85% of the original wording is still there, and a meaning check passes —
+            otherwise the paragraph comes back unchanged.
+          </p>
           {rwConfirm && rwEstimate && (
             <div className="confirm-row">
               <p className="muted small">
                 This is a long document: about {rwEstimate.paragraphs} paragraphs ≈ {rwEstimate.approxCalls}+ model calls against your IFM quota, and it can
-                take several minutes. The checks above have already run.
+                take several minutes.
               </p>
               <div className="hz-input-actions">
-                <button type="button" className="btn-primary" onClick={() => { setRwConfirm(false); void runRewrite(); }}>
-                  Rewrite anyway
+                <button type="button" className="btn-primary" onClick={() => { setRwConfirm(false); void runTransform(rwPendingMode); }}>
+                  {rwPendingMode === "proofread" ? "Proofread anyway" : "Rewrite anyway"}
                 </button>
                 <button type="button" className="btn-ghost" onClick={() => setRwConfirm(false)}>
-                  Skip the rewrite
+                  {rwPendingMode === "proofread" ? "Skip the proofread" : "Skip the rewrite"}
                 </button>
               </div>
             </div>
@@ -397,7 +462,7 @@ export default function App() {
         {(rwBusy || rwResult || rwError) && (
           <section className="rewrite card" aria-labelledby="rw-out-label">
             <div className="hz-panel-head">
-              <span id="rw-out-label" className="hz-panel-title">✦ Rewritten in a natural voice</span>
+              <span id="rw-out-label" className="hz-panel-title">{rwMode === "proofread" ? "✦ Proofread — errors fixed, wording kept" : "✦ Rewritten in a natural voice"}</span>
               <a className="btn-link" href="https://github.com/rajeevranjanpandey/paperlens#rewrite-with-ifm-optional" target="_blank" rel="noreferrer">
                 How it works
               </a>
@@ -412,10 +477,14 @@ export default function App() {
                 </div>
                 <div className="hz-panel-foot">
                   <span className="muted small">
-                    {rwProgress ? `Rewriting… block ${rwProgress.done} of ${rwProgress.total}` : "Rewriting…"}
+                    {rwProgress
+                      ? `${rwMode === "proofread" ? "Proofreading" : "Rewriting"}… block ${rwProgress.done} of ${rwProgress.total}`
+                      : rwMode === "proofread"
+                        ? "Proofreading…"
+                        : "Rewriting…"}
                   </span>
                   <button type="button" className="btn-ghost" onClick={() => rwAbort.current?.abort()}>
-                    Cancel rewrite
+                    {rwMode === "proofread" ? "Cancel proofread" : "Cancel rewrite"}
                   </button>
                 </div>
               </div>
@@ -424,11 +493,13 @@ export default function App() {
             {rwResult && (
               <>
                 <p className="muted small">
-                  {rwResult.stats.wordsIn} words in → {rwResult.stats.wordsOut} out · {rwResult.stats.rewritten} rewritten, {rwResult.stats.kept} kept
+                  {rwResult.stats.wordsIn} words in → {rwResult.stats.wordsOut} out ·{" "}
+                  {rwMode === "proofread" ? rwResult.stats.proofread : rwResult.stats.rewritten} {rwMode === "proofread" ? "proofread" : "rewritten"},{" "}
+                  {rwResult.stats.kept} kept
                   {rwCvBefore != null && rwCvAfter != null ? ` · sentence-length variation ${rwCvBefore.toFixed(2)} → ${rwCvAfter.toFixed(2)}` : ""}
                 </p>
                 {rwResult.stats.cancelled && (
-                  <p className="file-note">Rewrite cancelled partway — blocks that were not run kept their original text, marked “not run (cancelled)” below.</p>
+                  <p className="file-note">{rwMode === "proofread" ? "Proofreading" : "Rewrite"} cancelled partway — blocks that were not run kept their original text, marked “not run (cancelled)” below.</p>
                 )}
                 <div className="hz-out-text">{composedOutput}</div>
                 <div className="hz-panel-foot">
@@ -446,6 +517,16 @@ export default function App() {
                 </div>
 
                 <h4 className="sub">Paragraph by paragraph</h4>
+                {rwResult.blocks.some((b: any) => b.kind === "para") && (
+                  <p className="muted small">
+                    {rwResult.blocks.filter((b: any) => b.kind === "para" && (b.status.startsWith("rewritten") || b.status === "proofread")).length} of{" "}
+                    {rwResult.blocks.filter((b: any) => b.kind === "para").length} paragraphs {rwMode === "proofread" ? "proofread" : "rewritten"}
+                  </p>
+                )}
+                <p className="rw-legend muted small">
+                  <span className="hl hl-changed" aria-hidden="true" />
+                  Green highlights = wording that changed
+                </p>
                 <div className="rw-results">
                   {rwResult.blocks.map((b: any, i: number) => (
                     <div key={i} className="rw-block">
@@ -455,12 +536,23 @@ export default function App() {
                           <p>{b.original}</p>
                         </div>
                         <div className="rw-col out">
-                          <span className="stat-label">Output</span>
-                          <p>{b.output}</p>
+                          <span className="stat-label">
+                            Output
+                            {b.status.startsWith("rewritten") || b.status === "proofread"
+                              ? ` · ${Math.round(changedRatio(b.original, b.output) * 100)}% of words changed`
+                              : ""}
+                          </span>
+                          <p>
+                            {b.status.startsWith("rewritten") || b.status === "proofread" ? (
+                              <HighlightedText original={b.original} output={b.output} />
+                            ) : (
+                              b.output
+                            )}
+                          </p>
                         </div>
                       </div>
                       <div className="rw-actions">
-                        <span className="pill">{b.status}</span>
+                        <span className={pillClass(b.status)}>{b.status}</span>
                         {b.output !== b.original && (
                           <label className="check">
                             <input
@@ -468,7 +560,7 @@ export default function App() {
                               checked={!!rwAccepted[i]}
                               onChange={(e) => setRwAccepted((prev) => { const next = [...prev]; next[i] = e.target.checked; return next; })}
                             />
-                            Use this rewrite
+                            {rwMode === "proofread" ? "Use this correction" : "Use this rewrite"}
                           </label>
                         )}
                         {b.kind === "para" && (

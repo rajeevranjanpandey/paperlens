@@ -29,6 +29,7 @@ Official reference: the [IFM Quickstart](https://docs.ifm.ai/docs/quickstart.md)
 - **Protected spans.** Numbers, dates, URLs, emails and citations are swapped for placeholders before the model sees the text and restored afterwards.
 - **Four candidates per paragraph.** Each paragraph is rewritten four times (two parallel waves, varied temperatures); candidates must keep every protected span exactly, keep the document's number counts identical (multiset check), stay within a length band, and clear a rewrite-depth gate — a candidate that keeps 70% or more of the original's words in order counts as a trim, not a rewrite, and is rejected. Survivors are ranked deepest-first before the judge and drift checks. Rejection triggers one sterner retry.
 - **Judge + drift check.** A judge call arbitrates between the deepest passing candidates, and a drift check can still reject each in turn. If every candidate drifts, the pipeline escalates before giving up — a fidelity-first regeneration, then a close paraphrase (structure changes only), and for paragraphs with no facts to protect, a drift-approved near-threshold paraphrase as a last resort. A paragraph whose candidates all fail is returned unchanged.
+- **Proofreading (the cautious opposite).** The **Proofread** button fixes grammar, spelling and punctuation only — never meaning, structure, sentence order or tone. Two low-temperature candidates per paragraph must pass the same protected-span and number-multiset checks, stay within a 0.90–1.10 length band, keep at least 85% of the original wording, and pass the drift check; a correction that would reword is rejected and the paragraph comes back unchanged ("kept original (proofread would deviate)").
 - **Rate-limit resilience.** The IFM provider retries transient failures (HTTP 429, 5xx, network errors, empty completions) with backoff — 1.5s, 4s, 10s, 20s — so a quota spike mid-paper no longer kills paragraphs. Cancelling still stops everything immediately.
 - **Scale guardrails.** A progress bar counts blocks as they finish, with a Cancel button that stops new work (finished paragraphs are kept, the rest are marked "not run (cancelled)"). Documents over 20 paragraphs ask first, with an estimate of the model calls involved (~7 per paragraph) — a full paper can mean hundreds of calls against your own quota.
 - **Your key, your browser.** You paste your own IFM API key; it is stored only in your browser's localStorage and sent only to api.ifm.ai (whose CORS policy allows calls from this site). PaperLens has no backend and never sees it. Without a key, the checks still run on their own.
@@ -46,7 +47,7 @@ Nothing you paste for the checks is uploaded or stored. There is no backend, no 
 
 ```bash
 npm install
-npm test       # 76 tests: engine, extraction, citations, humanizer (incl. rewrite-depth gate), provider, adversarial, guardrails
+npm test       # 92 tests: engine, extraction, citations, humanizer (incl. rewrite-depth gate and proofreading gates), provider, adversarial, guardrails
 npm run dev    # http://127.0.0.1:5173
 npm run build  # static output in dist/
 ```
