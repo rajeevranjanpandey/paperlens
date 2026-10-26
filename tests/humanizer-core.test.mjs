@@ -49,6 +49,17 @@ test("verifyRewrite catches a repeated figure quietly dropped (multiset check)",
   assert.equal(verifyRewrite(work, faithful, map).ok, true);
 });
 
+test("verifyRewrite tolerates a comma moved next to a bare year", () => {
+  // Regression (found live 2026-10-26): NUMBER_RE swallows a trailing
+  // comma, so a faithful rewrite that moves a comma next to a year was
+  // rejected as "number counts changed (2024 -> 2024,)".
+  const work = "The survey ran between 2019 and 2024 and found clear gains in the final period of the study programme.";
+  const moved = "The survey ran between 2019 and 2024, and it found clear gains in the final period of the study programme.";
+  assert.equal(verifyRewrite(work, moved, {}).ok, true);
+  const droppedYear = "The survey ran between 2019 and found clear gains in the final period of the study programme.";
+  assert.equal(verifyRewrite(work, droppedYear, {}).ok, false);
+});
+
 test("humanizeText preserves protected spans and structure", async () => {
   const result = await humanizeText(SAMPLE, { complete: createMockComplete() });
   const joined = result.blocks.map((b) => b.output).join(" ");

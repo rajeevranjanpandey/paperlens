@@ -51,8 +51,29 @@ test("HTTP errors surface status and a body excerpt", async () => {
 
 test("network failures explain the reachability problem", async () => {
   const { fetchImpl } = stubFetch(async () => { throw new Error("Failed to fetch"); });
-  const complete = createIFMComplete({ apiKey: "TEST-KEY", fetchImpl });
+  const complete = createIFMComplete({ apiKey: "TEST-KEY", fetchImpl, retryDelays: [1, 1] });
   await assert.rejects(() => complete("S", "U"), /Could not reach the IFM API/);
+});
+
+test("a 429 is retried with backoff and the retry can succeed", async () => {
+  let n = 0;
+  const { calls, fetchImpl } = stubFetch(async () => {
+    n++;
+    if (n === 1) return { ok: false, status: 429, json: async () => ({}), text: async () => "rate limited" };
+    return okJson("Recovered.");
+  });
+  const complete = createIFMComplete({ apiKey: "TEST-KEY", fetchImpl, retryDelays: [1, 1, 1] });
+  assert.equal(await complete("S", "U"), "Recovered.");
+  assert.equal(calls.length, 2);
+});
+
+test("a persistent 429 still surfaces the rate-limit error after retries", async () => {
+  const { calls, fetchImpl } = stubFetch(async () => ({
+    ok: false, status: 429, json: async () => ({}), text: async () => "rate limited",
+  }));
+  const complete = createIFMComplete({ apiKey: "TEST-KEY", fetchImpl, retryDelays: [1, 1] });
+  await assert.rejects(() => complete("S", "U"), /IFM API returned 429: rate limited/);
+  assert.equal(calls.length, 3);
 });
 
 test("a missing key is rejected before any request", () => {
@@ -61,6 +82,6 @@ test("a missing key is rejected before any request", () => {
 
 test("empty completions are rejected", async () => {
   const { fetchImpl } = stubFetch(async () => okJson("   "));
-  const complete = createIFMComplete({ apiKey: "TEST-KEY", fetchImpl });
+  const complete = createIFMComplete({ apiKey: "TEST-KEY", fetchImpl, retryDelays: [1, 1] });
   await assert.rejects(() => complete("S", "U"), /empty completion/);
 });

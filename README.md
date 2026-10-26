@@ -28,7 +28,8 @@ Official reference: the [IFM Quickstart](https://docs.ifm.ai/docs/quickstart.md)
 
 - **Protected spans.** Numbers, dates, URLs, emails and citations are swapped for placeholders before the model sees the text and restored afterwards.
 - **Four candidates per paragraph.** Each paragraph is rewritten four times (two parallel waves, varied temperatures); candidates must keep every protected span exactly, keep the document's number counts identical (multiset check), stay within a length band, and clear a rewrite-depth gate — a candidate that keeps 70% or more of the original's words in order counts as a trim, not a rewrite, and is rejected. Survivors are ranked deepest-first before the judge and drift checks. Rejection triggers one sterner retry.
-- **Judge + drift check.** A judge call keeps the more faithful of two passing candidates, and a final drift check can still reject the winner. A paragraph whose candidates all fail is returned unchanged.
+- **Judge + drift check.** A judge call arbitrates between the deepest passing candidates, and a drift check can still reject each in turn. If every candidate drifts, the pipeline escalates before giving up — a fidelity-first regeneration, then a close paraphrase (structure changes only), and for paragraphs with no facts to protect, a drift-approved near-threshold paraphrase as a last resort. A paragraph whose candidates all fail is returned unchanged.
+- **Rate-limit resilience.** The IFM provider retries transient failures (HTTP 429, 5xx, network errors, empty completions) with backoff — 1.5s, 4s, 10s, 20s — so a quota spike mid-paper no longer kills paragraphs. Cancelling still stops everything immediately.
 - **Scale guardrails.** A progress bar counts blocks as they finish, with a Cancel button that stops new work (finished paragraphs are kept, the rest are marked "not run (cancelled)"). Documents over 20 paragraphs ask first, with an estimate of the model calls involved (~7 per paragraph) — a full paper can mean hundreds of calls against your own quota.
 - **Your key, your browser.** You paste your own IFM API key; it is stored only in your browser's localStorage and sent only to api.ifm.ai (whose CORS policy allows calls from this site). PaperLens has no backend and never sees it. Without a key, the checks still run on their own.
 - **No authorship scores.** The output reports descriptive before/after statistics (word counts, sentence-length variation), never an "AI probability" — the same philosophy as the style indicators.
@@ -45,7 +46,7 @@ Nothing you paste for the checks is uploaded or stored. There is no backend, no 
 
 ```bash
 npm install
-npm test       # 69 tests: engine, extraction, citations, humanizer (incl. rewrite-depth gate), provider, adversarial, guardrails
+npm test       # 76 tests: engine, extraction, citations, humanizer (incl. rewrite-depth gate), provider, adversarial, guardrails
 npm run dev    # http://127.0.0.1:5173
 npm run build  # static output in dist/
 ```
@@ -76,7 +77,7 @@ shared/ifm-provider.mjs   IFM chat-completions provider (OpenAI-compatible).
 src/App.tsx               The interface: editor, a standalone Citation check
                           section on the main page (runs on the paper alone),
                           report tabs (incl. Citations), and the rewrite panel.
-tests/                    69 tests: engine, style checks, DOCX/PDF extraction,
+tests/                    76 tests: engine, style checks, DOCX/PDF extraction,
                           citation check incl. a real-world grant-proposal
                           reference list, humanizer protection/verification,
                           and the IFM provider against a stubbed fetch.

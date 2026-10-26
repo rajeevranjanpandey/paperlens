@@ -121,6 +121,14 @@ const STERN_SUFFIX = `
 Your previous attempt failed an automatic check (a protected token was changed, the length drifted, or the rewrite stayed too close to the original wording).
 Be careful: copy every [[P..]] token exactly, keep the length close to the original, and change nothing factual - but reword much more deeply this time: new sentence openings, different sentence structure, same facts.`;
 
+const DRIFT_SUFFIX = `
+
+Your previous attempt changed the meaning of the text. Rewrite it once more, changing ONLY the wording and the sentence structure: keep every claim, quantity, comparison and qualification (words like "approximately", "average", "reported") exactly as strong as in the original. Add nothing, remove nothing, soften nothing.`;
+
+const CLOSE_SUFFIX = `
+
+Your previous attempts changed the meaning. Rewrite once more, staying as close to the original as possible while still changing the sentence structure: split or merge sentences, reorder clauses, and swap individual words for synonyms. Do not introduce any new image, detail or claim, and do not drop any.`;
+
 export const PICK_SYSTEM = `JUDGE_PICK. You compare two rewrites of the same paragraph.
 Reply with exactly one letter: A or B - whichever keeps the original meaning
 more faithfully while reading more naturally. If both are faithful, prefer
@@ -151,7 +159,15 @@ export function verifyRewrite(originalWork, candidate, protectedMap) {
   };
   const counts = (s) => {
     const m = new Map();
-    for (const n of restoreLoose(s).match(NUMBER_RE) || []) m.set(n, (m.get(n) || 0) + 1);
+    for (const raw of restoreLoose(s).match(NUMBER_RE) || []) {
+      // NUMBER_RE's digit/comma class swallows a trailing comma ("2024,"
+      // when a rewrite moves a comma next to a bare year). That comma is
+      // punctuation, not part of the figure - canonicalise before counting,
+      // or faithful rewrites get rejected for moving a comma. (Found live,
+      // 2026-10-26: three benchmark paragraphs returned unrewritten.)
+      const n = raw.replace(/,+$/, "");
+      m.set(n, (m.get(n) || 0) + 1);
+    }
     return m;
   };
   const before = counts(originalWork);
@@ -228,8 +244,8 @@ async function processBlock(block, complete, styleNote = "", signal = undefined)
   // on exactly this text.
   const tidy = (s) => s.replace(/,(\s*),/g, ",").replace(/\s+([.,;:!?])/g, "$1").trim();
   const system = styleNote ? `${REWRITE_SYSTEM}\n\nAdditional style instruction: ${styleNote}` : REWRITE_SYSTEM;
-  const rewrite = async (temperature, stern = false) =>
-    tidy(await complete(system, `TEXT TO REWRITE:\n${work}${stern ? STERN_SUFFIX : ""}`, temperature, signal));
+  const rewrite = async (temperature, suffix = "") =>
+    tidy(await complete(system, `TEXT TO REWRITE:\n${work}${suffix}`, temperature, signal));
 
   // The single pipeline, following the published methodology of
   // superhumanizer.ai / humanizethis.io: split into paragraphs, lock the
@@ -255,7 +271,7 @@ async function processBlock(block, complete, styleNote = "", signal = undefined)
     let verified = candidates.filter(acceptable);
     let afterRetry = false;
     if (!verified.length) {
-      const retry = await rewrite(0.8, true);
+      const retry = await rewrite(0.8, STERN_SUFFIX);
       if (acceptable(retry)) {
         verified = [retry];
         afterRetry = true;
@@ -280,6 +296,37 @@ async function processBlock(block, complete, styleNote = "", signal = undefined)
       if (await judgeDrift(complete, work, order[i], signal)) {
         const status = afterRetry ? "rewritten (after retry)" : i === 0 ? "rewritten" : "rewritten (fallback candidate)";
         return done(order[i], status);
+      }
+    }
+    // Every verified candidate drifted: escalate before giving up -
+    // first a fidelity-first regeneration, then a close paraphrase
+    // (structure changes only). A strict drift judge otherwise costs
+    // roughly one paragraph in ten, and descriptive prose or dense
+    // comparative paragraphs can fail even the fidelity retry
+    // (found live, 2026-10-26).
+    const retry = await rewrite(0.6, DRIFT_SUFFIX);
+    if (acceptable(retry) && (await judgeDrift(complete, work, retry, signal))) {
+      return done(retry, "rewritten (after retry)");
+    }
+    const close = await rewrite(0.4, CLOSE_SUFFIX);
+    if (acceptable(close) && (await judgeDrift(complete, work, close, signal))) {
+      return done(close, "rewritten (after retry)");
+    }
+    // Anchor-free paragraphs (no protected spans, no numbers): faith-
+    // fulness there rests entirely on the drift judge, and descriptive
+    // prose rewrites naturally sit near the depth threshold. A drift-
+    // approved near-threshold paraphrase still beats returning the
+    // original untouched (overlap 1.0), so as a last resort take the
+    // deepest verified candidate under a looser 0.85 ceiling and let
+    // the drift judge decide.
+    if (Object.keys(block.protectedMap).length === 0) {
+      const near = candidates
+        .filter((c) => verifyRewrite(work, c, block.protectedMap).ok)
+        .map((c) => ({ c, ov: verbatimOverlap(block.original, restoreText(c, block.protectedMap)) }))
+        .filter((x) => x.ov >= MAX_OVERLAP && x.ov < 0.85)
+        .sort((a, b) => a.ov - b.ov)[0];
+      if (near && (await judgeDrift(complete, work, near.c, signal))) {
+        return done(near.c, "rewritten (close paraphrase)");
       }
     }
     return kept("kept original (drift check failed)");
