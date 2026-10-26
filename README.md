@@ -6,7 +6,7 @@ Check a draft before you submit it. Paste or upload a paper (.txt, .md, .pdf or 
 
 | Check | What it does | How it works |
 |---|---|---|
-| Similarity | Finds passages that overlap with references you choose, and shows each match next to its source | 7-word shingle matching against the bundled sample texts or any files you add (.txt, .md, .pdf, .docx) |
+| Repetition | Finds passages that repeat inside the paper itself — doubled phrases, recycled sentences — and highlights them in place | 7-word shingle matching of the paper against itself; no references, no uploads |
 | Writing style | Experimental indicators: sentence-length uniformity, vocabulary variety, formulaic phrases, repeated sentence openers | Pure statistics computed from the text. No AI-authorship probability, by design |
 | Quality | Flesch reading ease and grade level, long-sentence and passive-voice counts, in-text citation detection, and concrete suggestions | Readability formulas, pattern matching and simple heuristics |
 | Citation cross-check | In-text citations with no reference entry, and reference entries never cited, in author-year and IEEE styles | Heading detection, surname/year extraction and comparison |
@@ -24,7 +24,7 @@ The one feature that talks to a network — and it is part of the same single fl
 2. Create a new API key and copy it immediately: it starts with `IFM-v1_` and the full key is shown only once, so store it somewhere safe.
 3. Paste it into the **IFM API key** field in PaperLens. The default model (`IFM/K2-Horizon-375B-A23B`) is pre-filled — no other setup is needed.
 
-Official reference: the [IFM Quickstart](https://docs.ifm.ai/docs/quickstart.md). Every other PaperLens check — similarity, style, quality, citations — runs fully offline and never needs a key.
+Official reference: the [IFM Quickstart](https://docs.ifm.ai/docs/quickstart.md). Every other PaperLens check — style, quality, citations, repetition — runs fully offline and never needs a key.
 
 - **Protected spans.** Numbers, dates, URLs, emails and citations are swapped for placeholders before the model sees the text and restored afterwards.
 - **Four candidates per paragraph.** Each paragraph is rewritten four times (two parallel waves, varied temperatures); candidates must keep every protected span exactly, keep the document's number counts identical (multiset check), stay within a length band, and clear a rewrite-depth gate — a candidate that keeps 70% or more of the original's words in order counts as a trim, not a rewrite, and is rejected. Survivors are ranked deepest-first before the judge and drift checks. Rejection triggers one sterner retry.
@@ -37,7 +37,7 @@ The pipeline lives in `shared/humanizer-core.mjs` with the provider in `shared/i
 
 ## What this is not
 
-PaperLens is a study tool, not Turnitin. It cannot search the internet or academic databases, so a 0% similarity here proves nothing about the wider world. Its style indicators describe a text; they cannot show who or what wrote it, and no verdict should be inferred from them. Detectors that output an "AI percentage" are unreliable enough that several universities have stopped using them, and false accusations harm students.
+PaperLens is a study tool, not Turnitin. It cannot search the internet or academic databases, and its repetition check compares a paper only against itself, so a clean result here proves nothing about the wider world. Its style indicators describe a text; they cannot show who or what wrote it, and no verdict should be inferred from them. Detectors that output an "AI percentage" are unreliable enough that several universities have stopped using them, and false accusations harm students.
 
 Nothing you paste for the checks is uploaded or stored. There is no backend, no analytics and no account. The optional rewrite tool is the exception: only when you press Humanize does your draft go to the IFM API, under your own key.
 
@@ -54,15 +54,14 @@ A live copy is built to GitHub Pages by `.github/workflows/pages.yml` on every p
 
 ## Try it in 30 seconds
 
-1. Open the app, expand References, and leave the bundled sample texts checked.
-2. Copy the first paragraph of the climate sample (see `shared/paper-core.mjs`) into the paper box.
-3. Press Analyze paper. The Similarity tab shows the passage highlighted with its source.
-4. Replace the text with your own writing and press Analyze again to see a clean report.
+1. Open the app and paste any paragraph twice into the paper box.
+2. Press Analyze & Rewrite (or just run the checks). The Repetition tab shows the repeated passage highlighted.
+3. Replace the text with your own writing and press it again to see a clean report.
 
 ## Structure
 
 ```text
-shared/paper-core.mjs     Analysis engine: tokenizer, shingle similarity, style
+shared/paper-core.mjs     Analysis engine: tokenizer, shingle repetition, style
                           indicators, readability, citations, passive voice.
 shared/extract-text.mjs   Upload parsing: DOCX via fflate + document.xml,
                           PDF via pdf.js (loaded only when a PDF is opened).
@@ -75,9 +74,8 @@ shared/humanizer-core.mjs Rewrite pipeline: block parsing, protected spans,
                           provider-agnostic.
 shared/ifm-provider.mjs   IFM chat-completions provider (OpenAI-compatible).
 src/App.tsx               The interface: editor, a standalone Citation check
-                          section on the main page (runs on the paper alone,
-                          no reference uploads), reference manager, report
-                          tabs (incl. Citations), and the rewrite panel.
+                          section on the main page (runs on the paper alone),
+                          report tabs (incl. Citations), and the rewrite panel.
 tests/                    69 tests: engine, style checks, DOCX/PDF extraction,
                           citation check incl. a real-world grant-proposal
                           reference list, humanizer protection/verification,
@@ -88,20 +86,19 @@ tests/                    69 tests: engine, style checks, DOCX/PDF extraction,
 
 - **Draft auto-save.** The paper is saved to localStorage as you type, so a refresh or accidental close does not lose work. A "clear" link removes it.
 - **Word target.** Set the essay length (say 2000 words) and a progress bar tracks how close the draft is.
-- **Recent checks.** The last eight checks are stored locally with word count, similarity and flags, so you can see progress across revisions.
+- **Recent checks.** The last eight checks are stored locally with word count, repetition and flags, so you can see progress across revisions.
 - **Download report.** The full report exports as a plain-text file, generated in the browser.
 
 ## Uploads
 
-DOCX files are unzipped in the browser and read from word/document.xml, with paragraph breaks and XML entities preserved. PDFs are parsed with pdf.js page by page; a scanned PDF with no text layer is detected and reported instead of silently checking an empty document. Both parsers also work for reference files.
+DOCX files are unzipped in the browser and read from word/document.xml, with paragraph breaks and XML entities preserved. PDFs are parsed with pdf.js page by page; a scanned PDF with no text layer is detected and reported instead of silently checking an empty document. Both parsers run entirely in the browser.
 
 ## Extending it
 
 The engine in `shared/paper-core.mjs` is plain JavaScript with no dependencies, so you can reuse it in a CLI, an LMS plugin or a server. Sensible next steps if you want to go further:
 
-- Add real reference corpora (your class's past submissions, with consent).
 - Group tone and style flags by paragraph for inline highlighting.
 - Add docx/pdf parsing before analysis (e.g. mammoth or pdf.js).
 - Persist reports locally with IndexedDB if you want history.
 
-MIT licensed. Not affiliated with Turnitin. Similarity is computed only against references you provide; style indicators are experimental statistics, not authorship verdicts.
+MIT licensed. Not affiliated with Turnitin. The repetition check compares a paper only against itself; style indicators are experimental statistics, not authorship verdicts.

@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { analyze, SAMPLE_REFERENCES, similarityReport, styleIndicators } from "../shared/paper-core.mjs";
+import { analyze, styleIndicators } from "../shared/paper-core.mjs";
 import { extractText } from "../shared/extract-text.mjs";
 import { humanizeText, estimateRewrite } from "../shared/humanizer-core.mjs";
 import { createIFMComplete, DEFAULT_IFM_MODEL } from "../shared/ifm-provider.mjs";
 import { citationCheck } from "../shared/citation-check.mjs";
 
-type RefDoc = { id: string; title: string; text: string; builtin?: boolean };
-type HistEntry = { at: number; words: number; similarity: number; flags: number };
+type HistEntry = { at: number; words: number; repetition: number; flags: number };
 
 function loadJSON<T>(key: string, fallback: T): T {
   try {
@@ -37,15 +36,12 @@ export default function App() {
   const [text, setText] = useState(() => loadJSON("pl.draft", ""));
   const [target, setTarget] = useState<number>(() => loadJSON("pl.target", 0) || 0);
   const [history, setHistory] = useState<HistEntry[]>(() => loadJSON("pl.history", [] as HistEntry[]));
-  const [refs, setRefs] = useState<RefDoc[]>(SAMPLE_REFERENCES.map((r) => ({ ...r, builtin: true })));
-  const [useSamples, setUseSamples] = useState(true);
-  const [tab, setTab] = useState<"overview" | "similarity" | "style" | "quality" | "citations">("overview");
+  const [tab, setTab] = useState<"overview" | "repetition" | "style" | "quality" | "citations">("overview");
   const [report, setReport] = useState<ReturnType<typeof analyze> | null>(null);
   const [ranAt, setRanAt] = useState<number | null>(null);
   const [fileNote, setFileNote] = useState("");
   const [busy, setBusy] = useState(false);
   const paperFile = useRef<HTMLInputElement>(null);
-  const refFile = useRef<HTMLInputElement>(null);
 
   // Rewrite (optional, BYO IFM key): the only feature that calls a network API.
   const [ifmKey, setIfmKey] = useState<string>(() => loadJSON("pl.ifmKey", ""));
@@ -63,7 +59,7 @@ export default function App() {
 
   // Standalone citation check: a first-class section on the main page, not
   // buried inside the post-analysis report. It reads the reference list
-  // inside the paper itself - no similarity references, no IFM key.
+  // inside the paper itself - no uploads, no IFM key.
   const [citText, setCitText] = useState<string | null>(null);
   const citSection = useRef<HTMLElement | null>(null);
   const runCitationCheck = () => {
@@ -72,18 +68,16 @@ export default function App() {
     requestAnimationFrame(() => citSection.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
-  const activeRefs = useMemo(() => refs.filter((r) => r.builtin === useSamples || !r.builtin), [refs, useSamples]);
-
   const run = useCallback(() => {
     if (!text.trim()) return;
-    const result = analyze(text, activeRefs);
+    const result = analyze(text, []);
     setReport(result);
     setRanAt(Date.now());
     setTab("overview");
     const entry: HistEntry = {
       at: Date.now(),
       words: result.quality.wordCount,
-      similarity: Math.round(result.similarity.percent * 10) / 10,
+      repetition: Math.round(result.similarity.selfRepetition.percent * 10) / 10,
       flags: result.style.commonPhrases.length + result.tone.length,
     };
     setHistory((h) => {
@@ -91,7 +85,7 @@ export default function App() {
       saveJSON("pl.history", next);
       return next;
     });
-  }, [text, activeRefs]);
+  }, [text]);
 
   // Draft auto-save: the paper survives a refresh or an accidental close.
   useEffect(() => {
@@ -119,24 +113,6 @@ export default function App() {
     } catch (e: any) {
       setFileNote(`Could not read ${f.name}: ${e?.message || e}`);
     }
-    setBusy(false);
-  };
-
-  const addRefs = async (files: FileList) => {
-    setBusy(true);
-    const loaded: RefDoc[] = [];
-    let note = "";
-    for (const f of Array.from(files)) {
-      const r = await extractText(f);
-      if (r.text) {
-        loaded.push({ id: `user-${f.name}-${loaded.length}`, title: f.name, text: r.text });
-      } else {
-        note = `${f.name}: ${r.error || "no text found"}`;
-      }
-    }
-    if (loaded.length) setRefs((r) => [...r, ...loaded]);
-    if (loaded.length || note) setReport(null);
-    setFileNote(note || `${loaded.length} reference${loaded.length === 1 ? "" : "s"} loaded`);
     setBusy(false);
   };
 
@@ -312,37 +288,6 @@ export default function App() {
               )}
             </div>
           )}
-          <details className="refs">
-            <summary>
-              References for the similarity check <span className="muted">(optional · {activeRefs.length} selected — only the Similarity tab uses these; the citation check reads your paper's own reference list and never needs them)</span>
-            </summary>
-            <div className="refs-body">
-              <label className="check">
-                <input type="checkbox" checked={useSamples} onChange={(e) => setUseSamples(e.target.checked)} />
-                Include the {SAMPLE_REFERENCES.length} bundled sample texts (useful for a quick demo)
-              </label>
-              <ul className="ref-list">
-                {activeRefs.map((r) => (
-                  <li key={r.id}>
-                    <span className="ref-title">{r.title}</span>
-                    {!r.builtin && (
-                      <button type="button" className="btn-link" onClick={() => setRefs((all) => all.filter((x) => x.id !== r.id))}>
-                        remove
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              <div className="ref-add">
-                <button type="button" className="btn-ghost" onClick={() => refFile.current?.click()} disabled={busy}>
-                  Add reference files
-                </button>
-                <input ref={refFile} type="file" hidden multiple accept=".txt,.md,.markdown,.pdf,.docx" onChange={(e) => e.target.files?.length && void addRefs(e.target.files)} />
-                <span className="muted small">Class notes, a friend's draft, sources you paraphrased — .txt, .md, .pdf or .docx.</span>
-              </div>
-            </div>
-          </details>
-
           <div className="rw-controls key-row">
             <label className="rw-field">
               <span className="muted small">IFM API key — only needed for the rewrite (stored only in this browser)</span>
@@ -551,7 +496,7 @@ export default function App() {
             <nav className="tabs" role="tablist" aria-label="Report sections">
               {([
                 ["overview", "Overview"],
-                ["similarity", "Similarity"],
+                ["repetition", "Repetition"],
                 ["style", "Writing style"],
                 ["quality", "Quality"],
                 ["citations", "Citations"],
@@ -563,7 +508,7 @@ export default function App() {
             </nav>
 
             {tab === "overview" && <Overview r={report} text={text} />}
-            {tab === "similarity" && <Similarity r={report.similarity} text={text} />}
+            {tab === "repetition" && <Repetition r={report.similarity} text={text} />}
             {tab === "style" && <Style r={report.style} />}
             {tab === "quality" && <Quality r={report.quality} full={report} text={text} />}
             {tab === "citations" && <Citations text={text} />}
@@ -573,13 +518,13 @@ export default function App() {
         {history.length > 0 && (
           <section className="history" aria-labelledby="hist-title">
             <h3 id="hist-title">Recent checks</h3>
-            <p className="muted small">Stored only in this browser. Word count and similarity at the moment of each check.</p>
+            <p className="muted small">Stored only in this browser. Word count and repeated text at the moment of each check.</p>
             <ul>
               {history.map((h) => (
                 <li key={h.at}>
                   <span className="tabular">{new Date(h.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
                   <span className="tabular">{h.words} words</span>
-                  <span className={`tabular sim ${h.similarity >= 25 ? "bad" : h.similarity >= 10 ? "warn" : "good"}`}>{h.similarity}% similarity</span>
+                  <span className={`tabular sim ${(h.repetition ?? 0) >= 25 ? "bad" : (h.repetition ?? 0) >= 10 ? "warn" : "good"}`}>{h.repetition ?? 0}% repeated</span>
                   <span className="tabular">{h.flags} flags</span>
                 </li>
               ))}
@@ -594,7 +539,7 @@ export default function App() {
       <footer className="foot">
         <span>PaperLens · checks run entirely in your browser</span>
         <span className="muted">
-          Not affiliated with Turnitin. Similarity is computed only against the references you provide; style indicators are experimental statistics, not authorship verdicts.
+          Not affiliated with Turnitin. The repetition check compares your paper only against itself; style indicators are experimental statistics, not authorship verdicts.
         </span>
       </footer>
     </div>
@@ -605,19 +550,20 @@ export default function App() {
 
 function Overview({ r, text }: { r: ReturnType<typeof analyze>; text: string }) {
   const { similarity, style, quality } = r;
-  const tone = similarity.percent >= 25 ? "bad" : similarity.percent >= 10 ? "warn" : "good";
+  const rep = similarity.selfRepetition;
+  const tone = rep.percent >= 25 ? "bad" : rep.percent >= 10 ? "warn" : "good";
   const cit = citationCheck(text);
   return (
     <div className="cards">
       <div className={`card stat ${tone}`}>
-        <span className="stat-label">Similarity</span>
-        <strong className="big tabular">{fmtPct(similarity.percent)}</strong>
+        <span className="stat-label">Repetition</span>
+        <strong className="big tabular">{fmtPct(rep.percent)}</strong>
         <span className="muted">
-          {similarity.percent === 0
-            ? `No overlapping passages found in ${similarity.referenceCount} reference${similarity.referenceCount === 1 ? "" : "s"}.`
-            : `Matched against ${similarity.referenceCount} reference${similarity.referenceCount === 1 ? "" : "s"} you provided.`}
+          {rep.percent === 0
+            ? "No passages repeat inside this paper."
+            : "Text that repeats inside the paper itself — doubled phrases and recycled passages. No references are used; the paper is checked against itself."}
         </span>
-        {similarity.selfRepetition.percent > 1 && <span className="flag">Also: {fmtPct(similarity.selfRepetition.percent)} repeated text within the paper</span>}
+        <span className="flag">Detail in the Repetition tab</span>
       </div>
       <div className="card stat">
         <span className="stat-label">Style indicators</span>
@@ -653,7 +599,7 @@ function Overview({ r, text }: { r: ReturnType<typeof analyze>; text: string }) 
         <h3>What to do next</h3>
         <ul className="next">
           <li>
-            Open <strong>Similarity</strong> to see each overlapping passage next to its source and rewrite the ones you meant to paraphrase.
+            Open <strong>Repetition</strong> to see passages that repeat inside the paper itself and trim the accidental doubles.
           </li>
           <li>
             Open <strong>Writing style</strong> for statistics that reviewers and editors associate with polished prose, including uniformity of sentence length.
@@ -671,20 +617,17 @@ function Overview({ r, text }: { r: ReturnType<typeof analyze>; text: string }) 
   );
 }
 
-/* ---------------- Similarity ---------------- */
+/* ---------------- Repetition ---------------- */
 
-const SOURCE_COLORS = ["#c0392b", "#8e44ad", "#16a085", "#d35400", "#2c5f8a", "#6b6b6b"];
-
-function Similarity({ r, text }: { r: ReturnType<typeof similarityReport>; text: string }) {
-  const colorOf = new Map(r.perSource.map((s, i) => [s.refId, SOURCE_COLORS[i % SOURCE_COLORS.length]]));
-  const marks = [...r.runs, ...r.selfRepetition.runs.map((s) => ({ ...s, refId: "__self" }))]
-    .sort((a, b) => a.start - b.start);
-  const segments: { text: string; refId?: string }[] = [];
+function Repetition({ r, text }: { r: ReturnType<typeof analyze>["similarity"]; text: string }) {
+  const rep = r.selfRepetition;
+  const marks = [...rep.runs].sort((a, b) => a.start - b.start);
+  const segments: { text: string; repeated?: boolean }[] = [];
   let cursor = 0;
   for (const m of marks) {
     if (m.start < cursor) continue; // overlaps: first match wins
     if (m.start > cursor) segments.push({ text: text.slice(cursor, m.start) });
-    segments.push({ text: text.slice(m.start, m.end), refId: m.refId });
+    segments.push({ text: text.slice(m.start, m.end), repeated: true });
     cursor = m.end;
   }
   if (cursor < text.length) segments.push({ text: text.slice(cursor) });
@@ -693,74 +636,45 @@ function Similarity({ r, text }: { r: ReturnType<typeof similarityReport>; text:
     <div className="panel">
       <div className="panel-head">
         <div>
-          <h3>Similarity: {fmtPct(r.percent)}</h3>
+          <h3>Repetition within this paper: {fmtPct(rep.percent)}</h3>
           <p className="muted">
-            {r.matchedWords} of {r.totalWords} words appear in your references in the same order. This is a comparison against {r.referenceCount} document
-            {r.referenceCount === 1 ? "" : "s"} only, not a database or internet search.
+            Passages that repeat inside the paper itself, word for word — doubled phrases, recycled sentences, copy-paste slips. No references
+            are used and nothing is compared against external sources: the paper is checked against itself only.
           </p>
         </div>
       </div>
 
-      {r.percent === 0 && r.selfRepetition.percent === 0 && <p className="empty">No overlapping passages were found.</p>}
+      {rep.percent === 0 && <p className="empty">No repeated passages were found.</p>}
 
-      {r.perSource.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Source</th>
-              <th className="num">Matched words</th>
-              <th className="num">Share of paper</th>
-            </tr>
-          </thead>
-          <tbody>
-            {r.perSource.map((s) => (
-              <tr key={s.refId}>
-                <td>
-                  <i className="dot" style={{ background: colorOf.get(s.refId) }} />
-                  {s.title}
-                </td>
-                <td className="num tabular">{s.words}</td>
-                <td className="num tabular">{fmtPct(s.percentOfPaper)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {r.selfRepetition.percent > 0 && (
-        <p className="note">
-          Repeated text inside the paper itself: {fmtPct(r.selfRepetition.percent)} (highlighted in gray below).
-        </p>
-      )}
-
-      <h4 className="sub">Your paper, highlighted</h4>
-      <div className="marked">
-        {segments.map((s, i) =>
-          s.refId ? (
-            <mark key={i} style={{ background: s.refId === "__self" ? "#d9d9d9" : `${colorOf.get(s.refId)}22`, borderBottom: `2px solid ${s.refId === "__self" ? "#999" : colorOf.get(s.refId)}` }}>
-              {s.text}
-            </mark>
-          ) : (
-            <span key={i}>{s.text}</span>
-          ),
-        )}
-      </div>
-
-      {r.runs.length > 0 && (
+      {rep.runs.length > 0 && (
         <>
-          <h4 className="sub">Matched passages</h4>
+          <h4 className="sub">Your paper, highlighted</h4>
+          <div className="marked">
+            {segments.map((s, i) =>
+              s.repeated ? (
+                <mark key={i} style={{ background: "#d9d9d9", borderBottom: "2px solid #999" }}>
+                  {s.text}
+                </mark>
+              ) : (
+                <span key={i}>{s.text}</span>
+              ),
+            )}
+          </div>
+
+          <h4 className="sub">Repeated passages</h4>
           <ul className="matches">
-            {r.runs.map((run, i) => (
-              <li key={i}>
-                <i className="dot" style={{ background: colorOf.get(run.refId) }} />
-                <div>
-                  <p className="quote">“{run.excerpt.slice(0, 220)}{run.excerpt.length > 220 ? "…" : ""}”</p>
-                  <p className="muted small">
-                    {run.wordCount} words · from {r.perSource.find((s) => s.refId === run.refId)?.title}
-                  </p>
-                </div>
-              </li>
-            ))}
+            {rep.runs.map((run, i) => {
+              const excerpt = text.slice(run.start, run.end);
+              return (
+                <li key={i}>
+                  <i className="dot" style={{ background: "#999" }} />
+                  <div>
+                    <p className="quote">“{excerpt.slice(0, 220)}{excerpt.length > 220 ? "…" : ""}”</p>
+                    <p className="muted small">12-word span · repeats inside this paper</p>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         </>
       )}
@@ -1143,10 +1057,8 @@ function downloadReport(report: ReturnType<typeof analyze>) {
   L.push("PaperLens report");
   L.push(`Generated ${new Date().toLocaleString()}`);
   L.push("");
-  L.push("SIMILARITY");
-  L.push(`  ${similarity.percent.toFixed(1)}% (${similarity.matchedWords} of ${similarity.totalWords} words) against ${similarity.referenceCount} reference(s)`);
-  for (const src of similarity.perSource) L.push(`  - ${src.title}: ${src.words} words (${src.percentOfPaper.toFixed(1)}%)`);
-  if (similarity.selfRepetition.percent > 1) L.push(`  Self-repetition: ${similarity.selfRepetition.percent.toFixed(1)}%`);
+  L.push("REPETITION (within this paper)");
+  L.push(`  ${similarity.selfRepetition.percent.toFixed(1)}% of the paper repeats inside itself (${similarity.selfRepetition.runs.length} repeated passage(s))`);
   L.push("");
   L.push("WRITING STYLE (experimental, descriptive only)");
   if (style.sentenceLength) L.push(`  Sentence length: mean ${style.sentenceLength.mean.toFixed(0)} words, variation ${style.sentenceLength.cv.toFixed(2)}`);
@@ -1175,7 +1087,7 @@ function downloadReport(report: ReturnType<typeof analyze>) {
     for (const s of quality.suggestions) L.push(`  - ${s}`);
     L.push("");
   }
-  L.push("Similarity is computed only against the references provided. Style indicators are");
+  L.push("The repetition check compares the paper only against itself. Style indicators are");
   L.push("experimental statistics, not authorship verdicts. Generated locally by PaperLens.");
   const blob = new Blob([L.join("\n")], { type: "text/plain;charset=utf-8" });
   const a = document.createElement("a");
