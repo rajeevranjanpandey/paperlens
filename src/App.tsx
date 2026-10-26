@@ -347,7 +347,7 @@ export default function App() {
           )}
           <div className="rw-controls key-row">
             <label className="rw-field">
-              <span className="muted small">IFM API key — only needed for the rewrite (stored only in this browser)</span>
+              <span className="muted small">IFM API key — needed for the rewrite and proofread (stored only in this browser)</span>
               <input
                 type="password"
                 autoComplete="off"
@@ -408,8 +408,8 @@ export default function App() {
             <button type="button" className="btn-ghost btn-lg" onClick={startProofread} disabled={!text.trim() || busy || rwBusy}>
               Proofread
             </button>
-            {ranAt && report && <span className="muted small">Checked locally {new Date(ranAt).toLocaleTimeString()}</span>}
-            {!ifmKey.trim() && <span className="muted small">No key? The checks still run — add an IFM key above to also rewrite or proofread.</span>}
+            {ranAt && report && <span className="muted small hint-line">Checked locally {new Date(ranAt).toLocaleTimeString()}</span>}
+            {!ifmKey.trim() && <span className="muted small hint-line">No key? The checks still run — add an IFM key above to also rewrite or proofread.</span>}
           </div>
           <p className="muted small method-note">
             How the rewrite works: your text is split into paragraphs; numbers, dates and citations are locked so they cannot change; each paragraph is rewritten
