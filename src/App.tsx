@@ -366,6 +366,39 @@ export default function App() {
             </label>
           </div>
 
+          <details className="refs key-help">
+            <summary>
+              How to get an IFM API key <span className="muted">(only the rewrite needs one — every check above runs without it)</span>
+            </summary>
+            <div className="refs-body">
+              <ol className="key-steps">
+                <li>
+                  Go to the IFM Platform API keys page —{" "}
+                  <a href="https://platform.ifm.ai/api-keys" target="_blank" rel="noreferrer">
+                    platform.ifm.ai/api-keys
+                  </a>{" "}
+                  — and sign in. If you don't have an IFM account yet, create one there first.
+                </li>
+                <li>
+                  Create a new API key and copy it straight away — it starts with <code>IFM-v1_</code> and the platform shows the full key only once, so store it
+                  somewhere safe.
+                </li>
+                <li>
+                  Paste the key into the <strong>IFM API key</strong> field above. The default model (<code>IFM/K2-Horizon-375B-A23B</code>) is already filled
+                  in — that's all the setup the rewrite needs.
+                </li>
+              </ol>
+              <p className="muted small">
+                Your key is stored only in this browser (localStorage) and is sent only to api.ifm.ai together with the text you choose to rewrite. Nothing else
+                in PaperLens ever sees it. Full official guide:{" "}
+                <a href="https://docs.ifm.ai/docs/quickstart.md" target="_blank" rel="noreferrer">
+                  IFM Quickstart
+                </a>
+                .
+              </p>
+            </div>
+          </details>
+
           <div className="run-row">
             <button type="button" className="btn-primary btn-lg" onClick={runAll} disabled={!text.trim() || busy || rwBusy}>
               {busy ? "Reading file…" : rwBusy ? "Checking & rewriting…" : "Analyze & Rewrite"}
@@ -375,8 +408,8 @@ export default function App() {
           </div>
           <p className="muted small method-note">
             How the rewrite works: your text is split into paragraphs; numbers, dates and citations are locked so they cannot change; each paragraph is rewritten
-            twice, the versions are checked mechanically (facts, number counts, length), a judge keeps the more faithful one, and a final drift check can still
-            reject it — anything that fails comes back unchanged.
+            four times, the versions are checked mechanically (facts, number counts, length, and depth — near-verbatim trims are rejected), the deepest faithful
+            version wins a judge round, and a final drift check can still reject it — anything that fails comes back unchanged.
           </p>
           {rwConfirm && rwEstimate && (
             <div className="confirm-row">

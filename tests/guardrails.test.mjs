@@ -11,7 +11,7 @@ const DOC = Array.from(
 test("estimateRewrite counts paragraphs and approximates model calls", () => {
   const est = estimateRewrite(`A Title\n\n${DOC}`);
   assert.equal(est.paragraphs, 6);
-  assert.equal(est.approxCalls, 24);
+  assert.equal(est.approxCalls, 42);
   assert.ok(est.blocks >= 7);
 });
 

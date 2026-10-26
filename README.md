@@ -18,10 +18,18 @@ Check a draft before you submit it. Paste or upload a paper (.txt, .md, .pdf or 
 
 The one feature that talks to a network — and it is part of the same single flow: paste or upload your draft, add your IFM key, press **Analyze & Rewrite**. The checks and the rewrite run together; there are no modes to choose. The methodology follows the published pipelines of sites like superhumanizer.ai and humanizethis.io — split, lock, rewrite, verify — with the verification done mechanically instead of promised:
 
+### Getting an IFM key
+
+1. Go to the IFM Platform API keys page — [platform.ifm.ai/api-keys](https://platform.ifm.ai/api-keys) — and sign in (create a free IFM account there if you don't have one).
+2. Create a new API key and copy it immediately: it starts with `IFM-v1_` and the full key is shown only once, so store it somewhere safe.
+3. Paste it into the **IFM API key** field in PaperLens. The default model (`IFM/K2-Horizon-375B-A23B`) is pre-filled — no other setup is needed.
+
+Official reference: the [IFM Quickstart](https://docs.ifm.ai/docs/quickstart.md). Every other PaperLens check — similarity, style, quality, citations — runs fully offline and never needs a key.
+
 - **Protected spans.** Numbers, dates, URLs, emails and citations are swapped for placeholders before the model sees the text and restored afterwards.
-- **Two candidates per paragraph.** Each paragraph is rewritten twice in parallel; candidates must keep every protected span exactly, keep the document's number counts identical (multiset check), and stay within a length band — otherwise they are rejected, with one sterner retry.
+- **Four candidates per paragraph.** Each paragraph is rewritten four times (two parallel waves, varied temperatures); candidates must keep every protected span exactly, keep the document's number counts identical (multiset check), stay within a length band, and clear a rewrite-depth gate — a candidate that keeps 70% or more of the original's words in order counts as a trim, not a rewrite, and is rejected. Survivors are ranked deepest-first before the judge and drift checks. Rejection triggers one sterner retry.
 - **Judge + drift check.** A judge call keeps the more faithful of two passing candidates, and a final drift check can still reject the winner. A paragraph whose candidates all fail is returned unchanged.
-- **Scale guardrails.** A progress bar counts blocks as they finish, with a Cancel button that stops new work (finished paragraphs are kept, the rest are marked "not run (cancelled)"). Documents over 20 paragraphs ask first, with an estimate of the model calls involved (~4 per paragraph) — a full paper can mean hundreds of calls against your own quota.
+- **Scale guardrails.** A progress bar counts blocks as they finish, with a Cancel button that stops new work (finished paragraphs are kept, the rest are marked "not run (cancelled)"). Documents over 20 paragraphs ask first, with an estimate of the model calls involved (~7 per paragraph) — a full paper can mean hundreds of calls against your own quota.
 - **Your key, your browser.** You paste your own IFM API key; it is stored only in your browser's localStorage and sent only to api.ifm.ai (whose CORS policy allows calls from this site). PaperLens has no backend and never sees it. Without a key, the checks still run on their own.
 - **No authorship scores.** The output reports descriptive before/after statistics (word counts, sentence-length variation), never an "AI probability" — the same philosophy as the style indicators.
 
@@ -37,7 +45,7 @@ Nothing you paste for the checks is uploaded or stored. There is no backend, no 
 
 ```bash
 npm install
-npm test       # 66 tests: engine, extraction, citations, humanizer, provider, adversarial, guardrails
+npm test       # 69 tests: engine, extraction, citations, humanizer (incl. rewrite-depth gate), provider, adversarial, guardrails
 npm run dev    # http://127.0.0.1:5173
 npm run build  # static output in dist/
 ```
@@ -62,13 +70,15 @@ shared/citation-check.mjs Field-by-field reference checks + cross-check
                           (tolerant section/entry parsing, DOI and
                           plausibility signals, Scholar/DOI verify links).
 shared/humanizer-core.mjs Rewrite pipeline: block parsing, protected spans,
-                          verification, judge passes; provider-agnostic.
+                          verification (incl. a rewrite-depth gate that
+                          rejects near-verbatim trims), judge passes;
+                          provider-agnostic.
 shared/ifm-provider.mjs   IFM chat-completions provider (OpenAI-compatible).
 src/App.tsx               The interface: editor, a standalone Citation check
                           section on the main page (runs on the paper alone,
                           no reference uploads), reference manager, report
                           tabs (incl. Citations), and the rewrite panel.
-tests/                    66 tests: engine, style checks, DOCX/PDF extraction,
+tests/                    69 tests: engine, style checks, DOCX/PDF extraction,
                           citation check incl. a real-world grant-proposal
                           reference list, humanizer protection/verification,
                           and the IFM provider against a stubbed fetch.

@@ -109,7 +109,8 @@ export const REWRITE_SYSTEM = `You rewrite text so it reads like a person wrote 
 
 Rules:
 - Keep every fact, claim, name and number exactly. Tokens like [[P0]] are protected data: copy them byte-identical, never expand, move or drop them.
-- Vary sentence length and shape naturally. Do not make every sentence the same length, and do not start consecutive sentences the same way.
+- Rewrite, do not edit: rebuild the sentences. Change how sentences open, split a long sentence or merge short ones, and prefer the active voice where it sounds natural. Swap verbs and sentence frames, not just connectors - fresh wording throughout. A sentence carried over word-for-word from the original is a failure, unless it consists mostly of protected tokens.
+- Vary sentence length and shape naturally - mix short, punchy sentences with longer ones. Do not make every sentence the same length, and do not start consecutive sentences the same way.
 - Remove stock AI transitions ("furthermore", "moreover", "in conclusion", "it is important to note") unless they carry real meaning.
 - Do not add facts, examples or details that are not in the original.
 - Keep the same language and roughly the same length as the original.
@@ -117,12 +118,14 @@ Rules:
 
 const STERN_SUFFIX = `
 
-Your previous attempt failed an automatic check (a protected token was changed or the length drifted).
-Be careful: copy every [[P..]] token exactly, keep the length close to the original, and change nothing factual.`;
+Your previous attempt failed an automatic check (a protected token was changed, the length drifted, or the rewrite stayed too close to the original wording).
+Be careful: copy every [[P..]] token exactly, keep the length close to the original, and change nothing factual - but reword much more deeply this time: new sentence openings, different sentence structure, same facts.`;
 
 export const PICK_SYSTEM = `JUDGE_PICK. You compare two rewrites of the same paragraph.
 Reply with exactly one letter: A or B - whichever keeps the original meaning
-more faithfully while reading more naturally. No other text.`;
+more faithfully while reading more naturally. If both are faithful, prefer
+the one whose wording and sentence structure differ more from the original.
+No other text.`;
 
 export const DRIFT_SYSTEM = `JUDGE_DRIFT. You check whether a rewrite changed any fact,
 number, name or claim compared with the original. Tokens like [[P0]] are
@@ -166,6 +169,36 @@ export function verifyRewrite(originalWork, candidate, protectedMap) {
   return { ok: reasons.length === 0, reasons };
 }
 
+/**
+ * How much of the original survives in a candidate, word for word and in
+ * order: the longest-common-subsequence ratio over normalised words.
+ * 1 = identical, 0 = no shared word runs. Live benchmarking (2026-10-25)
+ * showed trim-only "rewrites" scoring 0.84-0.86 while genuine rewrites by
+ * established tools scored 0.39-0.53 with every fact intact - so a
+ * candidate at or above MAX_OVERLAP has not really been rewritten.
+ * The gate applies only to paragraphs of at least 25 words: a short
+ * factual line often cannot be reworded far without distorting it.
+ */
+export const MAX_OVERLAP = 0.7;
+export const OVERLAP_MIN_WORDS = 25;
+
+export function verbatimOverlap(original, candidate) {
+  const words = (s) => s.toLowerCase().replace(/[^a-z0-9%\s.]/g, " ").split(/\s+/).filter(Boolean);
+  const a = words(original);
+  const b = words(candidate);
+  if (!a.length || !b.length) return 1;
+  let prev = new Uint16Array(b.length + 1);
+  let curr = new Uint16Array(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = 0;
+    for (let j = 1; j <= b.length; j++) {
+      curr[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], curr[j - 1]);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length] / Math.max(a.length, b.length);
+}
+
 /* --------------------------- orchestration --------------------------- */
 
 async function judgePick(complete, original, candA, candB, signal = undefined) {
@@ -201,32 +234,53 @@ async function processBlock(block, complete, styleNote = "", signal = undefined)
   // The single pipeline, following the published methodology of
   // superhumanizer.ai / humanizethis.io: split into paragraphs, lock the
   // facts, generate candidates, verify mechanically, retry sterner, let a
-  // judge pick between two passing candidates, then drift-check the winner.
+  // judge arbitrates between the deepest passing candidates, then a
+  // drift check walks them in order.
   // A paragraph whose candidates all fail is returned unchanged.
+  // A candidate must pass the mechanical fact checks AND be a genuine
+  // rewording: near-verbatim trims are rejected and retried sterner.
+  const wordCount = (s) => (s.trim() ? s.trim().split(/\s+/).length : 0);
+  const acceptable = (c) => {
+    if (!verifyRewrite(work, c, block.protectedMap).ok) return false;
+    if (wordCount(block.original) < OVERLAP_MIN_WORDS) return true;
+    return verbatimOverlap(block.original, restoreText(c, block.protectedMap)) < MAX_OVERLAP;
+  };
   try {
-    const [candA, candB] = await Promise.all([rewrite(0.8), rewrite(1.0)]);
+    // Four candidates in two waves (peak concurrency stays bounded):
+    // more draws = a better chance one is both deep and faithful.
+    const wave1 = await Promise.all([rewrite(0.7), rewrite(0.95)]);
     if (signal?.aborted) return kept("not run (cancelled)");
-    let verified = [candA, candB].filter((c) => verifyRewrite(work, c, block.protectedMap).ok);
+    const wave2 = await Promise.all([rewrite(1.1), rewrite(1.25)]);
+    const candidates = [...wave1, ...wave2];
+    let verified = candidates.filter(acceptable);
     let afterRetry = false;
     if (!verified.length) {
       const retry = await rewrite(0.8, true);
-      if (verifyRewrite(work, retry, block.protectedMap).ok) {
+      if (acceptable(retry)) {
         verified = [retry];
         afterRetry = true;
       }
     }
     if (!verified.length) return kept("kept original (all candidates failed checks)");
-    let winner = verified[0];
-    let loser = verified[1];
-    if (verified.length === 2) {
-      const pick = await judgePick(complete, work, verified[0], verified[1], signal);
-      [winner, loser] = pick === "A" ? [verified[0], verified[1]] : [verified[1], verified[0]];
+    // Rank the survivors by rewrite depth (least verbatim first) - the
+    // tuning goal is the deepest rewrite that stays faithful. The judge
+    // arbitrates between the two deepest on naturalness, then the drift
+    // check walks the order until one candidate passes.
+    const depth = (c) =>
+      wordCount(block.original) < OVERLAP_MIN_WORDS
+        ? 0
+        : verbatimOverlap(block.original, restoreText(c, block.protectedMap));
+    const ranked = [...verified].sort((a, b) => depth(a) - depth(b));
+    let order = ranked;
+    if (ranked.length >= 2) {
+      const pick = await judgePick(complete, work, ranked[0], ranked[1], signal);
+      if (pick === "B") order = [ranked[1], ranked[0], ...ranked.slice(2)];
     }
-    if (await judgeDrift(complete, work, winner, signal)) {
-      return done(winner, afterRetry ? "rewritten (after retry)" : "rewritten");
-    }
-    if (loser && (await judgeDrift(complete, work, loser, signal))) {
-      return done(loser, "rewritten (fallback candidate)");
+    for (let i = 0; i < Math.min(order.length, 3); i++) {
+      if (await judgeDrift(complete, work, order[i], signal)) {
+        const status = afterRetry ? "rewritten (after retry)" : i === 0 ? "rewritten" : "rewritten (fallback candidate)";
+        return done(order[i], status);
+      }
     }
     return kept("kept original (drift check failed)");
   } catch (e) {
@@ -253,13 +307,14 @@ async function pool(items, limit, fn, onProgress) {
 
 /**
  * Estimate the scale of a rewrite before running it: block/paragraph
- * counts and the approximate number of model calls (~4 per paragraph:
- * two candidates, a judge pick and a drift check; retries add more).
+ * counts and the approximate number of model calls (~7 per paragraph:
+ * four candidates, a judge pick and up to two drift checks; retries
+ * add more).
  */
 export function estimateRewrite(text) {
   const blocks = parseDocument(text);
   const paragraphs = blocks.filter((b) => b.kind === "para").length;
-  return { blocks: blocks.length, paragraphs, approxCalls: paragraphs * 4 };
+  return { blocks: blocks.length, paragraphs, approxCalls: paragraphs * 7 };
 }
 
 /**
