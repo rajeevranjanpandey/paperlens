@@ -60,7 +60,7 @@ function HighlightedText({ original, output }: { original: string; output: strin
 }
 
 export default function App() {
-  const [text, setText] = useState(() => loadJSON("pl.draft", ""));
+  const [text, setText] = useState("");
   const [target, setTarget] = useState<number>(() => loadJSON("pl.target", 0) || 0);
   const [history, setHistory] = useState<HistEntry[]>(() => loadJSON("pl.history", [] as HistEntry[]));
   const [tab, setTab] = useState<"overview" | "repetition" | "style" | "quality" | "citations">("overview");
@@ -118,11 +118,11 @@ export default function App() {
     });
   }, [text]);
 
-  // Draft auto-save: the paper survives a refresh or an accidental close.
+  // The paper box always starts empty (Rajeev's call, 2026-10-27): no draft
+  // is restored or auto-saved. Drop any stale draft left by older versions.
   useEffect(() => {
-    const t = window.setTimeout(() => saveJSON("pl.draft", text), 600);
-    return () => window.clearTimeout(t);
-  }, [text]);
+    clearDraft();
+  }, []);
 
   const setTargetWords = (n: number) => {
     setTarget(n);
@@ -338,9 +338,8 @@ export default function App() {
               )}
               {text && (
                 <span className="muted small">
-                  Draft saved in this browser
-                  <button type="button" className="btn-link" onClick={() => { clearDraft(); setText(""); }}>
-                    clear
+                  <button type="button" className="btn-link" onClick={() => setText("")}>
+                    clear text
                   </button>
                 </span>
               )}
