@@ -10,7 +10,8 @@ Check a draft before you submit it. Paste or upload a paper (.txt, .md, .pdf or 
 | Writing style | Experimental indicators: sentence-length uniformity, vocabulary variety, formulaic phrases, repeated sentence openers | Pure statistics computed from the text. No AI-authorship probability, by design |
 | Quality | Flesch reading ease and grade level, long-sentence and passive-voice counts, in-text citation detection, and concrete suggestions | Readability formulas, pattern matching and simple heuristics |
 | Citation cross-check | In-text citations with no reference entry, and reference entries never cited, in author-year and IEEE styles | Heading detection, surname/year extraction and comparison |
-| Citation check | Every reference split into fields (authors, year, title, venue, DOI) and checked field by field: valid DOI syntax, plausible year, duplicates, list ordering, cross-check — with one-click DOI and Google Scholar verification links | Local format and plausibility signals only; PaperLens cannot query academic databases, so a flag means "verify this field", never "this source is fake". Tolerates `Selected Technical References` headings, `[R1]` labels, corporate authors and wrapped entries |
+| Citation check | Every reference split into fields (authors, year, title, venue, DOI) and checked field by field: valid DOI syntax, plausible year, duplicates, list ordering, cross-check — with one-click DOI and Google Scholar verification links | Local format and plausibility signals only, so a flag means "verify this field", never "this source is fake". Tolerates `Selected Technical References` headings, `[R1]` labels, corporate authors and wrapped entries |
+| Reference verification (opt-in) | Confirms each reference actually exists: DOI lookups and title searches against Crossref and OpenAlex, comparing title, first author and year against the entry | Free public APIs, no key. Only the reference entries are sent — never the paper's text. Verdicts: verified, check details (a field differs), or not found |
 | Academic tone | Informal wording, second-person address and stray exclamation marks, each with a suggested fix | Curated pattern list with positions |
 | Inline flags | Tone and recycled-phrase flags highlighted directly inside your paper text | Overlap-safe span rendering in the Quality tab |
 
@@ -24,7 +25,7 @@ The one feature that talks to a network — and it is part of the same single fl
 2. Create a new API key and copy it immediately: it starts with `IFM-v1_` and the full key is shown only once, so store it somewhere safe.
 3. Paste it into the **IFM API key** field in PaperLens. The default model (`IFM/K2-Horizon-375B-A23B`) is pre-filled — no other setup is needed.
 
-Official reference: the [IFM Quickstart](https://docs.ifm.ai/docs/quickstart.md). Every other PaperLens check — style, quality, citations, repetition — runs fully offline and never needs a key.
+Official reference: the [IFM Quickstart](https://docs.ifm.ai/docs/quickstart.md). Every other PaperLens check — style, quality, citations, repetition — runs fully offline and never needs a key. The citation check also offers an opt-in online verification against Crossref and OpenAlex (free, no key; reference entries only, never your text).
 
 - **Protected spans.** Numbers, dates, URLs, emails and citations are swapped for placeholders before the model sees the text and restored afterwards.
 - **Four candidates per paragraph.** Each paragraph is rewritten four times (two parallel waves, varied temperatures); candidates must keep every protected span exactly, keep the document's number counts identical (multiset check), stay within a length band, and clear a rewrite-depth gate — a candidate that keeps 70% or more of the original's words in order counts as a trim, not a rewrite, and is rejected. Survivors are ranked deepest-first before the judge and drift checks. Rejection triggers one sterner retry.
@@ -47,7 +48,7 @@ Nothing you paste for the checks is uploaded or stored. There is no backend, no 
 
 ```bash
 npm install
-npm test       # 92 tests: engine, extraction, citations, humanizer (incl. rewrite-depth gate and proofreading gates), provider, adversarial, guardrails
+npm test       # 101 tests: engine, extraction, citations, online reference verification, humanizer (incl. rewrite-depth gate and proofreading gates), provider, adversarial, guardrails
 npm run dev    # http://127.0.0.1:5173
 npm run build  # static output in dist/
 ```
@@ -70,6 +71,9 @@ shared/extract-text.mjs   Upload parsing: DOCX via fflate + document.xml,
 shared/citation-check.mjs Field-by-field reference checks + cross-check
                           (tolerant section/entry parsing, DOI and
                           plausibility signals, Scholar/DOI verify links).
+shared/reference-verify.mjs Opt-in online verification of each entry
+                          against Crossref + OpenAlex (DOI lookup, title
+                          search, title/author/year comparison).
 shared/humanizer-core.mjs Rewrite pipeline: block parsing, protected spans,
                           verification (incl. a rewrite-depth gate that
                           rejects near-verbatim trims), judge passes;

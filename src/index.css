@@ -254,6 +254,7 @@ main { width: min(980px, 100% - 32px); margin: 0 auto; flex: 1; }
 .cit-fields { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 .cit-link { color: var(--accent); font-size: 13.5px; font-weight: 500; }
 .pill-warn { background: #b07a001a; color: var(--warn); }
+.pill-bad { background: #b3261e1f; color: #8c1d18; }
 .stat.warn .big { color: var(--warn); }
 
 /* rewrite hero layout (two-panel) */

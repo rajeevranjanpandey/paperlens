@@ -5,6 +5,7 @@ import { humanizeText, proofreadText, estimateRewrite, estimateProofread } from 
 import { wordDiff, changedRatio } from "../shared/word-diff.mjs";
 import { createIFMComplete, DEFAULT_IFM_MODEL } from "../shared/ifm-provider.mjs";
 import { citationCheck } from "../shared/citation-check.mjs";
+import { verifyReferences } from "../shared/reference-verify.mjs";
 
 type HistEntry = { at: number; words: number; repetition: number; flags: number };
 
@@ -869,6 +870,36 @@ function Indicator({ title, value, desc, flag }: { title: string; value: string;
 
 function Citations({ text }: { text: string }) {
   const r = useMemo(() => citationCheck(text), [text]);
+  const [vf, setVf] = useState<{ running: boolean; done: number; results: any[] | null }>({ running: false, done: 0, results: null });
+  useEffect(() => {
+    setVf({ running: false, done: 0, results: null });
+  }, [text]);
+  const vfByIndex = useMemo(() => {
+    const m = new Map<number, any>();
+    (vf.results || []).forEach((x: any) => m.set(x.index, x));
+    return m;
+  }, [vf.results]);
+  const vfCounts = useMemo(() => {
+    const c = { verified: 0, mismatch: 0, notFound: 0, error: 0 };
+    (vf.results || []).forEach((x: any) => {
+      if (x.status === "verified") c.verified++;
+      else if (x.status === "mismatch") c.mismatch++;
+      else if (x.status === "not-found") c.notFound++;
+      else c.error++;
+    });
+    return c;
+  }, [vf.results]);
+  const runVerify = async () => {
+    setVf({ running: true, done: 0, results: null });
+    try {
+      const results = await verifyReferences(r.entries, {
+        onProgress: (d: number) => setVf((p) => ({ ...p, done: d })),
+      });
+      setVf({ running: false, done: results.length, results });
+    } catch {
+      setVf({ running: false, done: 0, results: null });
+    }
+  };
   return (
     <div className="panel">
       <div className="panel-head">
@@ -876,8 +907,9 @@ function Citations({ text }: { text: string }) {
           <h3>Citation check</h3>
           <p className="muted">
             Each reference is split into fields — authors, year, title, venue, DOI — and every field is checked separately, because a citation can point at a real
-            paper and still be wrong. PaperLens runs locally and cannot query academic databases, so these are format and plausibility signals, not authenticity
-            verdicts. Use the DOI and Scholar links to verify an entry against the real record in one click.
+            paper and still be wrong. The field checks below run locally and judge format and plausibility only. For the question they cannot answer — does this
+            source actually exist, with these authors and this year? — run the online verification: it looks each entry up in Crossref and OpenAlex, the free
+            catalogs behind most DOI records.
           </p>
         </div>
       </div>
@@ -915,6 +947,22 @@ function Citations({ text }: { text: string }) {
             </div>
           </div>
 
+          <div className="run-row">
+            <button type="button" className="btn-primary" onClick={runVerify} disabled={vf.running}>
+              {vf.running ? `Verifying… ${vf.done}/${r.entries.length}` : "Verify references online"}
+            </button>
+            <span className="hint-line muted small">
+              Opt-in and free: sends only these reference entries — never your paper's text — to Crossref and OpenAlex to confirm each source exists and its
+              title, authors and year match.
+            </span>
+          </div>
+          {vf.results && (
+            <p className="note">
+              Online verification: <strong>{vfCounts.verified} verified</strong> · {vfCounts.mismatch} to check · {vfCounts.notFound} not found
+              {vfCounts.error ? ` · ${vfCounts.error} couldn't be checked (connection problem)` : ""}. Details are on each entry below.
+            </p>
+          )}
+
           {r.missing.length > 0 && (
             <>
               <h4 className="sub">Cited in the text, missing from the list</h4>
@@ -931,11 +979,26 @@ function Citations({ text }: { text: string }) {
 
           <h4 className="sub">Every entry, field by field</h4>
           <ul className="cit-list">
-            {r.entries.map((e: any) => (
+            {r.entries.map((e: any) => {
+              const v = vfByIndex.get(e.index);
+              return (
               <li key={e.index} className="cit-entry">
                 <p className="cit-line">{e.line}</p>
                 <div className="cit-fields">
                   <span className="pill">{e.num ? `IEEE [${e.num}]` : e.surname || "entry"}</span>
+                  {v && (
+                    <span
+                      className={`pill ${v.status === "verified" ? "pill-ok" : v.status === "not-found" ? "pill-bad" : v.status === "mismatch" ? "pill-warn" : ""}`}
+                    >
+                      {v.status === "verified"
+                        ? `Verified · ${v.source}`
+                        : v.status === "mismatch"
+                          ? "Check details"
+                          : v.status === "not-found"
+                            ? "Not found online"
+                            : "Couldn't check"}
+                    </span>
+                  )}
                   {e.year && <span className="pill">{e.year}</span>}
                   {e.doi ? (
                     <a className="cit-link" href={e.doiUrl} target="_blank" rel="noreferrer">
@@ -958,8 +1021,33 @@ function Citations({ text }: { text: string }) {
                     ))}
                   </ul>
                 )}
+                {v && v.status !== "verified" && (
+                  <ul className="flaglist">
+                    {v.diffs.map((d: string, i: number) => (
+                      <li key={i}>
+                        <span className={`pill ${v.status === "not-found" ? "pill-bad" : "pill-warn"}`}>online</span>
+                        <span className="muted">{d}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {v && v.record && v.status !== "verified" && (
+                  <p className="muted small">
+                    Closest record ({v.source}): “{v.record.title}”
+                    {v.record.year ? ` (${v.record.year})` : ""}
+                    {v.record.url ? (
+                      <>
+                        {" — "}
+                        <a className="cit-link" href={v.record.url} target="_blank" rel="noreferrer">
+                          open record
+                        </a>
+                      </>
+                    ) : null}
+                  </p>
+                )}
               </li>
-            ))}
+              );
+            })}
           </ul>
           <p className="note">
             Why field-by-field? Studies of AI-generated bibliographies have found large shares of fabricated or mangled references, and a reference can be wrong in
